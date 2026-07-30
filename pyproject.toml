@@ -1,0 +1,126 @@
+[project]
+name = "browser-interaction-mcp"
+version = "0.1.0"
+description = "An unofficial MCP server exposing pre-approved, deterministic browser actions"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "amc40" }]
+dependencies = [
+    "fastmcp>=3.4.5,<4",
+    "mcp>=1.29.0,<2",
+    "pydantic>=2.13.4,<3",
+    "pydantic-settings>=2.14.2,<3",
+]
+
+[project.scripts]
+browser-interaction-mcp = "browser_interaction_mcp.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "deptry>=0.23.1",
+    "mypy>=1.18.2",
+    "pip-audit>=2.9.0",
+    "pre-commit>=4.4.0",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.4",
+]
+
+# ---------------------------------------------------------------------------
+# Linting / formatting
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Start from "everything", then subtract only the rules that fight the
+# formatter or contradict another selected rule. Anything not listed in
+# `ignore` is an error, so rules added in future ruff releases are opt-out
+# rather than opt-in.
+select = ["ALL"]
+ignore = [
+    "COM812", # missing-trailing-comma: conflicts with the formatter
+    "CPY001", # this project does not use per-file copyright headers
+    "D203",   # incompatible with D211 (blank line before class)
+    "D213",   # incompatible with D212 (multi-line summary position)
+    "ISC001", # single-line-implicit-string-concat: conflicts with the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ANN401",  # test doubles legitimately forward **kwargs: Any
+    "D103",    # a test's name is its documentation
+    "PLR2004", # magic values are fine in assertions
+    "S101",    # asserts are the point of a test
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["browser_interaction_mcp"]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# Type checking
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests"]
+strict = true
+# Extras that `strict` does not turn on by itself.
+warn_unreachable = true
+enable_error_code = [
+    "explicit-override",
+    "ignore-without-code",
+    "possibly-undefined",
+    "redundant-expr",
+    "truthy-bool",
+    "unused-awaitable",
+]
+
+# ---------------------------------------------------------------------------
+# Tests / coverage
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["--strict-config", "--strict-markers", "--import-mode=importlib", "-ra"]
+filterwarnings = ["error"]
+xfail_strict = true
+
+[tool.coverage.run]
+source = ["browser_interaction_mcp"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+# ---------------------------------------------------------------------------
+# Dependency hygiene
+# ---------------------------------------------------------------------------
+[tool.deptry]
+known_first_party = ["browser_interaction_mcp"]
+
+[tool.deptry.per_rule_ignores]
+# `mcp` is only imported under `TYPE_CHECKING`, which deptry does not see, but
+# the types come straight from it so it stays a direct dependency.
+DEP002 = ["mcp"]
