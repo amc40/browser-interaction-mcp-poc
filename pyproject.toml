@@ -17,7 +17,7 @@ dependencies = [
 browser-interaction-mcp = "browser_interaction_mcp.__main__:main"
 
 [build-system]
-requires = ["uv_build>=0.8.17,<0.9.0"]
+requires = ["uv_build>=0.11.31,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
@@ -60,6 +60,8 @@ ignore = [
     "D103",    # a test's name is its documentation
     "PLR2004", # magic values are fine in assertions
     "S101",    # asserts are the point of a test
+    "S105",    # the credentials in tests are fakes, and gitleaks checks the rest
+    "S106",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]

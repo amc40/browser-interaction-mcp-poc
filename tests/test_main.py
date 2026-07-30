@@ -37,6 +37,8 @@ def test_serves_over_http_when_configured(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("BROWSER_MCP_TRANSPORT", "http")
     monkeypatch.setenv("BROWSER_MCP_HOST", "10.0.0.5")
     monkeypatch.setenv("BROWSER_MCP_PORT", "9999")
+    monkeypatch.setenv("BROWSER_MCP_GITHUB_CLIENT_ID", "Ov23liExample")
+    monkeypatch.setenv("BROWSER_MCP_GITHUB_CLIENT_SECRET", "not-a-real-secret")
 
     main()
 
