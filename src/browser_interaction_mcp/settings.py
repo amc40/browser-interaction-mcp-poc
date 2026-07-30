@@ -9,9 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Transport = Literal["stdio", "http"]
 
-#: The account this server belongs to. Everything here runs with that person's
-#: own browser credentials, so exactly one GitHub login is ever authorised.
-DEFAULT_GITHUB_LOGIN = "amc40"
+#: The account this server belongs to, as GitHub's immutable numeric user ID.
+#: Everything here runs with that person's own browser credentials, so exactly
+#: one account is ever authorised. Find an ID at https://api.github.com/users/<login>.
+DEFAULT_GITHUB_USER_ID = "36701168"
 
 
 class Settings(BaseSettings):
@@ -67,11 +68,21 @@ class Settings(BaseSettings):
         "outside local debugging so browser state does not leak into tool output.",
     )
 
-    github_login: str = Field(
-        default=DEFAULT_GITHUB_LOGIN,
-        min_length=1,
-        description="The one GitHub login allowed to call tools. Compared "
-        "case-insensitively against the login on the caller's verified token.",
+    github_user_id: str = Field(
+        default=DEFAULT_GITHUB_USER_ID,
+        pattern=r"^\d+$",
+        description="Numeric ID of the one GitHub account allowed to call "
+        "tools, compared against the `sub` claim on the caller's verified "
+        "token. An ID rather than a login because logins can be changed, and "
+        "a freed login can be registered by somebody else.",
+    )
+    github_token_cache_seconds: int = Field(
+        default=300,
+        ge=0,
+        description="How long a verified GitHub token stays cached. Without a "
+        "cache every single request costs two GitHub API calls. The cost of "
+        "one is that a token revoked on GitHub keeps working until its entry "
+        "expires, so this is a revocation delay; 0 disables caching.",
     )
     github_client_id: str | None = Field(
         default=None,

@@ -45,9 +45,19 @@ list.
 
 Authentication is [FastMCP's `GitHubProvider`](https://gofastmcp.com/servers/auth/oauth-proxy):
 clients run a normal GitHub OAuth flow, and the resulting token is verified
-against the GitHub API on every request. Authorisation is a one-function check
-comparing the token's `login` claim to `BROWSER_MCP_GITHUB_LOGIN`, which
-defaults to the repository owner.
+against the GitHub API. Authorisation is a one-function check comparing the
+token's `sub` claim to `BROWSER_MCP_GITHUB_USER_ID`.
+
+That setting is a numeric GitHub user ID rather than a login, because logins can
+be changed and a login freed by a rename can be registered by somebody else. Find
+one at `https://api.github.com/users/<login>`; it defaults to the repository
+owner's. A value that is not digits is rejected at startup, so a login typed
+there fails loudly instead of silently matching nothing.
+
+Verified tokens are cached for `BROWSER_MCP_GITHUB_TOKEN_CACHE_SECONDS` (five
+minutes by default) because each verification costs two GitHub API calls. The
+cache is a revocation delay — a token revoked on GitHub keeps working until its
+entry expires — so set `0` if that matters more than the API budget.
 
 **This only works over the http transport.** MCP carries credentials in HTTP
 headers, and stdio has no headers — it is a pipe to a subprocess, so its trust
@@ -73,10 +83,10 @@ will prompt for the OAuth flow on first connect.
 This is a loopback, single-process, single-user setup, and several of the
 defaults it relies on are only safe because of that.
 [`docs/deployment.md`](docs/deployment.md) lists the mitigations a real
-deployment would need first — TLS and the base URL, pinning identity to the
-GitHub user ID rather than the login, token-verification caching, ownership of
-the OAuth state, and the fact that shell access on the host bypasses all of
-this.
+deployment would need first — TLS and the base URL FastMCP derives cookie
+security from, restricting the OAuth proxy's redirect URIs, owning the OAuth
+state rather than inheriting a directory keyed off the client secret, and the
+fact that shell access on the host bypasses all of this.
 
 ## Layout
 

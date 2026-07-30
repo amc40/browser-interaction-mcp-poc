@@ -10,6 +10,20 @@ process outlives the session that started it.
 only configuration this repository supports. The list is ordered roughly by how
 badly each one bites.
 
+Two items that were originally on this list have since been done, and are noted
+here so the reasoning is not lost:
+
+- **Identity is pinned to the GitHub numeric user ID**, not the login, because
+  logins can be changed and a freed login can be registered by somebody else.
+  `BROWSER_MCP_GITHUB_USER_ID` holds it, and settings validation rejects
+  anything that is not digits so a login typed there fails at startup rather
+  than locking the operator out silently.
+- **Token verification is cached** for `BROWSER_MCP_GITHUB_TOKEN_CACHE_SECONDS`,
+  five minutes by default. Without it every request cost two GitHub API calls.
+  The cache is a revocation delay: a token revoked on GitHub keeps working until
+  its entry expires, so shorten it — or set `0` — if revocation needs to be
+  immediate. It is also per-process, so replicas do not share it.
+
 ## 1. Terminate TLS, and set the base URL to the https one
 
 Bearer tokens travel in request headers. Over plaintext, anyone on the path can
@@ -28,35 +42,14 @@ So: set `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` to the public https URL, update the
 GitHub OAuth app's callback to match, and keep `BROWSER_MCP_HOST=127.0.0.1` so
 the reverse proxy is the only thing actually listening.
 
-## 2. Pin the identity to the GitHub user ID, not the login
-
-`github_login_is` compares the token's `login` claim. GitHub logins are mutable,
-and once an account is renamed the old login is free for anyone else to
-register. On a laptop that is a curiosity; on a public endpoint it is a path to
-someone else becoming the authorised user.
-
-The verified token already carries `sub` — the account's numeric ID, which never
-changes. Match on that, and keep the login only for the error messages. It is a
-small change to `auth.py`, but it needs the operator's numeric ID in config, so
-it has been left until there is a deployment to configure.
-
-## 3. Turn on token-verification caching
-
-`GitHubTokenVerifier` defaults to `cache_ttl_seconds=None`, meaning no caching,
-and it makes **two** GitHub API calls (`/user` and `/user/repos`) on every
-single MCP request. Against GitHub's 5,000-per-hour authenticated limit that is
-roughly 2,500 MCP requests an hour before the server can no longer authenticate
-anybody — and it hands anyone who can reach the endpoint a cheap way to get
-there. Pass `cache_ttl_seconds` when constructing the provider.
-
-## 4. Restrict the OAuth proxy's redirect URIs
+## 2. Restrict the OAuth proxy's redirect URIs
 
 `allowed_client_redirect_uris` defaults to `None`, which allows every URI. That
 is reasonable when the only client is on the same machine; on a reachable
 endpoint it widens the authorization-code interception surface for no benefit.
 Pin it to the redirect URIs the clients actually use.
 
-## 5. Take ownership of the OAuth state
+## 3. Take ownership of the OAuth state
 
 With `client_storage=None`, FastMCP creates an encrypted store under
 `~/.local/share/fastmcp/oauth-proxy/<fingerprint>`, where the fingerprint and
@@ -75,14 +68,14 @@ defaults to being derived from the GitHub client secret. Three consequences:
 Set `jwt_signing_key` explicitly from a managed secret rather than letting it
 follow the client secret around.
 
-## 6. Rate limit at the edge as well
+## 4. Rate limit at the edge as well
 
 `ToolCallRateLimitingMiddleware` keeps its bucket in process memory, so two
 workers give twice the configured rate. It also sits *behind* authentication by
 design, which means it does nothing about unauthenticated floods — those have
 to be limited at the reverse proxy, along with the OAuth endpoints themselves.
 
-## 7. Handle the secrets as secrets
+## 5. Handle the secrets as secrets
 
 `github_client_secret` is a `SecretStr`, so it stays out of logs, reprs and
 tracebacks — but a `.env` file is still a plaintext file on a disk somebody
@@ -93,7 +86,7 @@ used anyway, make sure its permissions are not world-readable.
 `BROWSER_MCP_INCLUDE_ERROR_DETAILS` must stay off: it sends internal errors and
 tracebacks, which by then will include browser state, to whoever is calling.
 
-## 8. Nobody gets a shell
+## 6. Nobody gets a shell
 
 [SDR 0001](sdr/0001-github-authentication.md) accepts an unauthenticated stdio
 transport on the grounds that local shell access is the operator's own. On a
@@ -108,7 +101,7 @@ interactive login, do not co-locate it with anything else, and treat remote code
 execution in *any* service on that host as a total compromise of the automated
 accounts — not a partial one.
 
-## 9. Protect the browser profile at rest
+## 7. Protect the browser profile at rest
 
 Once `tools.py` drives a real browser, the host stores live authenticated
 sessions for third-party services — the actual thing worth stealing, and worth
@@ -116,7 +109,7 @@ more than the GitHub token that guards it. Encrypt the profile at rest, keep the
 sessions scoped as narrowly as each service permits, and have a tested way to
 revoke them all quickly.
 
-## 10. Log who did what
+## 8. Log who did what
 
 Nothing currently records which tool ran, when, or on whose authority. On a
 laptop the answer is always "the operator". Deployed, an authenticated `sub` and

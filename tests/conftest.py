@@ -10,7 +10,7 @@ from fastmcp.server.auth import AccessToken
 from mcp.server.auth.middleware.auth_context import auth_context_var
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 
-from browser_interaction_mcp.settings import DEFAULT_GITHUB_LOGIN
+from browser_interaction_mcp.settings import DEFAULT_GITHUB_USER_ID
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -35,13 +35,19 @@ def _isolated_environment(
 class Authenticate(Protocol):
     """Presents a verified token to the server, as an authenticated request does."""
 
-    def __call__(self, login: Any = ..., **extra_claims: Any) -> None:
-        """Authenticate subsequent tool calls as ``login``.
+    def __call__(
+        self,
+        user_id: Any = ...,
+        login: Any = ...,
+        **extra_claims: Any,
+    ) -> None:
+        """Authenticate subsequent tool calls as that GitHub account.
 
         Args:
-            login: GitHub login to claim. ``None`` omits the claim entirely,
-                standing in for a token issued by something other than GitHub;
-                a non-string stands in for a malformed one.
+            user_id: Numeric GitHub ID to claim, as the ``sub`` claim. ``None``
+                omits it entirely, standing in for a token issued by something
+                other than GitHub; a non-string stands in for a malformed one.
+            login: GitHub login to claim. Only ever used in error messages.
             extra_claims: Further claims to put on the token.
         """
 
@@ -64,8 +70,14 @@ def authenticate() -> Authenticate:
         The helper.
     """
 
-    def _authenticate(login: Any = DEFAULT_GITHUB_LOGIN, **extra: Any) -> None:
+    def _authenticate(
+        user_id: Any = DEFAULT_GITHUB_USER_ID,
+        login: Any = "amc40",
+        **extra: Any,
+    ) -> None:
         claims: dict[str, Any] = dict(extra)
+        if user_id is not None:
+            claims["sub"] = user_id
         if login is not None:
             claims["login"] = login
         access_token = AccessToken(

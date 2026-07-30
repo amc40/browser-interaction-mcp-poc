@@ -30,11 +30,13 @@ than writing our own.** Specifically:
 
 - `GitHubProvider` for authentication. It runs the OAuth flow against a GitHub
   OAuth app and verifies the resulting opaque token by calling the GitHub API,
-  putting the verified `login` on the token's claims. Configured whenever the
+  putting the verified account on the token's claims. Configured whenever the
   transport is http; settings validation refuses an http server that has no
   OAuth app, so a port is never bound that callers cannot be authenticated on.
 - `AuthMiddleware` for authorisation, with a one-function `AuthCheck` that
-  compares that `login` to the configured one, case-insensitively. Middleware
+  compares the token's `sub` claim — the account's immutable numeric ID — to
+  the configured one. An ID rather than a login, because logins can be changed
+  and a login freed by a rename can be registered by somebody else. Middleware
   rather than per-tool decorators, so a browser action added to `tools.py` is
   covered the moment it is registered and there is no decorator to forget.
   It also filters `tools/list`, so an unauthorised caller is not even shown
@@ -65,6 +67,9 @@ shell access can already read. It looks like authentication without adding any.
 
 - Over http, only the configured GitHub account can list or call tools. That is
   the requirement, met.
+- Verified tokens are cached, so revoking one on GitHub takes effect only after
+  its entry expires. `BROWSER_MCP_GITHUB_TOKEN_CACHE_SECONDS` controls that
+  window, and `0` removes it at the cost of two GitHub API calls per request.
 - Over stdio, the local user is the caller and no GitHub identity is involved.
   `build_auth_provider` logs a warning at startup saying so, rather than letting
   it be discovered. The README says it too.

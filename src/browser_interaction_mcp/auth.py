@@ -7,7 +7,7 @@ against the GitHub API. Authorisation — deciding that the proven identity is
 *the* permitted one — is an ``AuthCheck``, the callable FastMCP's
 ``AuthMiddleware`` applies to every component on the server.
 
-All this module contributes is the one-line policy in :func:`github_login_is`.
+All this module contributes is the one-line policy in :func:`github_user_id_is`.
 """
 
 from __future__ import annotations
@@ -26,20 +26,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def github_login_is(login: str) -> AuthCheck:
+def github_user_id_is(user_id: str) -> AuthCheck:
     """Build a check that passes only for one GitHub account.
 
+    The account is identified by its numeric ID, taken from the token's ``sub``
+    claim, rather than by its login. Logins can be changed, and a login freed by
+    a rename can be registered by somebody else; the ID never changes hands.
+
     Args:
-        login: The only GitHub login permitted to use the server. Matched
-            case-insensitively, as GitHub logins themselves are.
+        user_id: Numeric ID of the only GitHub account permitted to use the
+            server.
 
     Returns:
         An auth check for ``AuthMiddleware``, which applies it to every tool.
     """
-    allowed = login.casefold()
 
     def check(context: AuthContext) -> bool:
-        """Allow the request only if its token belongs to the allowed user.
+        """Allow the request only if its token belongs to the allowed account.
 
         Args:
             context: The token, if any, and the component being accessed.
@@ -48,24 +51,30 @@ def github_login_is(login: str) -> AuthCheck:
             True, the only way to be authorised.
 
         Raises:
-            AuthorizationError: If the caller is not the allowed GitHub user.
+            AuthorizationError: If the caller is not the allowed GitHub account.
                 Raising rather than returning False is how an auth check
                 explains itself; the message reaches the client.
         """
-        claimed = context.token.claims.get("login") if context.token else None
+        claims = context.token.claims if context.token else {}
+        claimed = claims.get("sub")
 
-        if not isinstance(claimed, str):
+        if not isinstance(claimed, str) or not claimed:
             msg = (
                 "This server is restricted to a single GitHub account, so every "
                 "call must present a token verified against the GitHub API."
             )
             raise AuthorizationError(msg)
 
-        if claimed.casefold() != allowed:
-            # Name the rejected login but not the allowed one: the caller
-            # already knows who they are, and does not need to be told whose
-            # account would have worked.
-            msg = f"GitHub user {claimed!r} is not authorised to use this server."
+        if claimed != user_id:
+            # Name the rejected account but not the allowed one. Both halves are
+            # the caller's own identity, so telling them costs nothing and turns
+            # a misconfigured ID into an obvious diagnosis rather than a silent
+            # lockout.
+            login = claims.get("login")
+            msg = (
+                f"GitHub account {login!r} (id {claimed}) is not authorised to "
+                "use this server."
+            )
             raise AuthorizationError(msg)
 
         return True
@@ -102,4 +111,7 @@ def build_auth_provider(settings: Settings) -> GitHubProvider | None:
         client_id=client_id,
         client_secret=client_secret.get_secret_value(),
         base_url=settings.oauth_base_url,
+        # Verification is two GitHub API calls, and without a cache that is two
+        # per request. See docs/deployment.md for the revocation delay it buys.
+        cache_ttl_seconds=settings.github_token_cache_seconds,
     )

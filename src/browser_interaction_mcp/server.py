@@ -10,7 +10,7 @@ from fastmcp import FastMCP
 from fastmcp.server.middleware.authorization import AuthMiddleware
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 
-from browser_interaction_mcp.auth import build_auth_provider, github_login_is
+from browser_interaction_mcp.auth import build_auth_provider, github_user_id_is
 from browser_interaction_mcp.middleware import ToolCallRateLimitingMiddleware
 from browser_interaction_mcp.settings import Settings
 from browser_interaction_mcp.tools import register_tools
@@ -60,7 +60,9 @@ def build_server(settings: Settings | None = None) -> FastMCP:
 
     # Authorisation comes first: an unauthorised caller should not be able to
     # spend the operator's rate-limit budget, and the budget is server-wide.
-    mcp.add_middleware(AuthMiddleware(auth=github_login_is(settings.github_login)))
+    mcp.add_middleware(
+        AuthMiddleware(auth=github_user_id_is(settings.github_user_id)),
+    )
     # Rate limiting is next, so that throttled calls are rejected before any
     # tool - and therefore any browser - is touched.
     mcp.add_middleware(

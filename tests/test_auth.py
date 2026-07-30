@@ -13,7 +13,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from fastmcp.server import context
-from fastmcp.server.auth.providers.github import GitHubProvider
+from fastmcp.server.auth.providers.github import GitHubProvider, GitHubTokenVerifier
 from pydantic import SecretStr
 
 from browser_interaction_mcp.auth import build_auth_provider
@@ -21,6 +21,8 @@ from browser_interaction_mcp.server import build_server
 from browser_interaction_mcp.settings import Settings
 
 if TYPE_CHECKING:
+    from fastmcp.utilities.token_cache import TokenCache
+
     from tests.conftest import Authenticate
 
 
@@ -30,8 +32,8 @@ async def _call_server_info(settings: Settings | None = None) -> None:
         await client.call_tool("server_info")
 
 
-async def test_the_allowed_user_may_call_tools(authenticate: Authenticate) -> None:
-    authenticate("amc40")
+async def test_the_allowed_account_may_call_tools(authenticate: Authenticate) -> None:
+    authenticate("36701168")
 
     await _call_server_info()
 
@@ -41,59 +43,71 @@ async def test_a_caller_with_no_token_is_refused() -> None:
         await _call_server_info()
 
 
-async def test_another_github_user_is_refused(authenticate: Authenticate) -> None:
-    authenticate("someone-else")
+async def test_another_github_account_is_refused(authenticate: Authenticate) -> None:
+    authenticate("99999999", login="someone-else")
 
-    with pytest.raises(ToolError, match="'someone-else' is not authorised"):
+    with pytest.raises(ToolError, match="'someone-else' \\(id 99999999\\)"):
         await _call_server_info()
 
 
-async def test_the_allowed_login_is_never_disclosed(
+async def test_the_allowed_account_is_never_disclosed(
     authenticate: Authenticate,
 ) -> None:
     """A rejected caller learns that they failed, not who would have passed."""
-    authenticate("someone-else")
+    authenticate("99999999", login="someone-else")
 
     with pytest.raises(ToolError) as refusal:
         await _call_server_info()
 
-    assert "amc40" not in str(refusal.value)
+    assert "36701168" not in str(refusal.value)
 
 
-async def test_a_token_without_a_login_claim_is_refused(
+async def test_a_renamed_login_does_not_change_who_is_authorised(
     authenticate: Authenticate,
 ) -> None:
-    """A verified token that is not a GitHub one proves nothing here."""
-    authenticate(None, sub="1234")
-
-    with pytest.raises(ToolError, match="restricted to a single GitHub account"):
-        await _call_server_info()
-
-
-async def test_a_non_string_login_claim_is_refused(
-    authenticate: Authenticate,
-) -> None:
-    authenticate(["amc40"])
-
-    with pytest.raises(ToolError, match="restricted to a single GitHub account"):
-        await _call_server_info()
-
-
-@pytest.mark.parametrize("login", ["AMC40", "Amc40"])
-async def test_the_login_comparison_ignores_case(
-    authenticate: Authenticate,
-    login: str,
-) -> None:
-    """GitHub logins are case-insensitive, so the check must be too."""
-    authenticate(login)
+    """The whole reason the check is on the ID: logins are not identities."""
+    authenticate("36701168", login="renamed-since")
 
     await _call_server_info()
 
 
-async def test_the_allowed_login_is_configurable(authenticate: Authenticate) -> None:
-    authenticate("somebody-new")
+async def test_taking_over_a_freed_login_does_not_grant_access(
+    authenticate: Authenticate,
+) -> None:
+    """Someone who registers a login the operator abandoned is still a stranger."""
+    authenticate("99999999", login="amc40")
 
-    await _call_server_info(Settings(github_login="somebody-new"))
+    with pytest.raises(ToolError, match="is not authorised"):
+        await _call_server_info()
+
+
+async def test_a_token_without_a_subject_claim_is_refused(
+    authenticate: Authenticate,
+) -> None:
+    """A verified token that is not a GitHub one proves nothing here."""
+    authenticate(None)
+
+    with pytest.raises(ToolError, match="restricted to a single GitHub account"):
+        await _call_server_info()
+
+
+@pytest.mark.parametrize("subject", [36701168, "", None])
+async def test_a_malformed_subject_claim_is_refused(
+    authenticate: Authenticate,
+    subject: object,
+) -> None:
+    authenticate(subject)
+
+    with pytest.raises(ToolError, match="restricted to a single GitHub account"):
+        await _call_server_info()
+
+
+async def test_the_allowed_account_is_configurable(
+    authenticate: Authenticate,
+) -> None:
+    authenticate("12345")
+
+    await _call_server_info(Settings(github_user_id="12345"))
 
 
 async def test_unauthorised_callers_are_not_shown_the_tools() -> None:
@@ -160,6 +174,45 @@ def test_http_transport_authenticates_against_github() -> None:
 
     assert isinstance(provider, GitHubProvider)
     assert str(provider.base_url).startswith("http://127.0.0.1:9001")
+
+
+def _token_cache(provider: GitHubProvider) -> TokenCache:
+    """Return the cache the provider verifies tokens through."""
+    verifier = provider._token_validator  # noqa: SLF001
+    assert isinstance(verifier, GitHubTokenVerifier)
+    return verifier._cache  # noqa: SLF001
+
+
+def _http_settings(**overrides: object) -> Settings:
+    return Settings(
+        transport="http",
+        github_client_id="Ov23liExample",
+        github_client_secret=SecretStr("not-a-real-secret"),
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
+def test_token_verification_is_cached_by_default() -> None:
+    """Uncached, every request costs two GitHub API calls."""
+    provider = build_auth_provider(_http_settings())
+
+    assert provider is not None
+    assert _token_cache(provider).enabled
+
+
+def test_the_cache_lifetime_is_configurable() -> None:
+    provider = build_auth_provider(_http_settings(github_token_cache_seconds=60))
+
+    assert provider is not None
+    assert _token_cache(provider)._ttl == 60  # noqa: SLF001
+
+
+def test_caching_can_be_turned_off() -> None:
+    """Zero trades the GitHub API budget back for instant revocation."""
+    provider = build_auth_provider(_http_settings(github_token_cache_seconds=0))
+
+    assert provider is not None
+    assert not _token_cache(provider).enabled
 
 
 def test_stdio_transport_has_no_auth_provider() -> None:

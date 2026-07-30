@@ -21,7 +21,8 @@ def test_defaults_are_conservative() -> None:
     assert settings.rate_limit_per_second == 1.0
     assert settings.rate_limit_burst == 5
     assert settings.include_error_details is False
-    assert settings.github_login == "amc40"
+    assert settings.github_user_id == "36701168"
+    assert settings.github_token_cache_seconds == 300
     assert settings.github_client_id is None
     assert settings.github_client_secret is None
 
@@ -50,7 +51,9 @@ def test_environment_overrides_defaults(
         ("BROWSER_MCP_RATE_LIMIT_PER_SECOND", "0"),
         ("BROWSER_MCP_RATE_LIMIT_BURST", "0"),
         ("BROWSER_MCP_LOG_LEVEL", "CHATTY"),
-        ("BROWSER_MCP_GITHUB_LOGIN", ""),
+        ("BROWSER_MCP_GITHUB_USER_ID", ""),
+        ("BROWSER_MCP_GITHUB_USER_ID", "amc40"),
+        ("BROWSER_MCP_GITHUB_TOKEN_CACHE_SECONDS", "-1"),
         ("BROWSER_MCP_GITHUB_CLIENT_ID", ""),
     ],
 )
@@ -63,6 +66,12 @@ def test_invalid_configuration_is_rejected(
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_the_user_id_must_be_an_id_not_a_login() -> None:
+    """A login here would never match the `sub` claim, locking the operator out."""
+    with pytest.raises(ValidationError):
+        Settings(github_user_id="amc40")
 
 
 def test_unknown_options_are_rejected() -> None:
