@@ -1,0 +1,33 @@
+---
+- name: Install zram-tools
+  ansible.builtin.apt:
+    name: zram-tools
+    state: present
+
+- name: Configure zram
+  ansible.builtin.template:
+    src: zramswap.j2
+    dest: /etc/default/zramswap
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart zramswap
+
+- name: Enable the zram swap service
+  ansible.builtin.systemd_service:
+    name: zramswap
+    enabled: true
+    state: started
+
+- name: Collect the installed packages
+  ansible.builtin.package_facts:
+    manager: apt
+
+# Raspberry Pi OS ships a swap *file* on the SD card, which is exactly what
+# zram is here to replace.
+- name: Disable the SD-card swap file
+  ansible.builtin.systemd_service:
+    name: dphys-swapfile
+    enabled: false
+    state: stopped
+  when: "'dphys-swapfile' in ansible_facts.packages"

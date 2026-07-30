@@ -1,0 +1,10 @@
+---
+# Chromium only. `playwright install chrome` fails on Linux arm64 — Chrome for
+# Testing publishes no arm64 Linux build — so never set channel="chrome" in
+# tools.py either.
+browser_playwright_browsers:
+  - chromium
+
+# The escape hatch for sites that block headless Chromium: run headed under
+# xvfb-run. Off by default because it is dead weight until it is needed.
+browser_install_xvfb: false

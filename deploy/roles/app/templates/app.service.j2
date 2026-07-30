@@ -1,0 +1,51 @@
+# Managed by Ansible (app role) — local edits will be overwritten.
+[Unit]
+Description=browser-interaction-mcp — pre-approved browser actions over MCP
+Documentation=https://github.com/amc40/browser-interaction-mcp-poc
+After=network-online.target
+Wants=network-online.target
+# Refuse to start rather than write the browser profile to the SD card if the
+# SSD did not come up.
+RequiresMountsFor={{ mcp_state_dir }}
+StartLimitIntervalSec={{ app_start_limit_interval_sec }}
+StartLimitBurst={{ app_start_limit_burst }}
+
+[Service]
+Type=simple
+User={{ mcp_service_user }}
+Group={{ mcp_service_group }}
+# Not the checkout: settings.py reads .env relative to the working directory.
+WorkingDirectory={{ mcp_state_dir }}
+EnvironmentFile={{ mcp_environment_file }}
+ExecStart={{ mcp_checkout_dir }}/.venv/bin/{{ app_console_script }}
+Restart=on-failure
+RestartSec={{ app_restart_sec }}
+
+# --- Sandboxing ------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ mcp_state_dir }}
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
+# Deliberately absent, because Chromium needs them:
+#   MemoryDenyWriteExecute — V8 maps executable pages for JIT.
+#   RestrictNamespaces     — the renderer sandbox uses user namespaces, and
+#                            blocking them means running with --no-sandbox,
+#                            which is a worse trade.
+#   SystemCallFilter       — @system-service blocks the clone flags that same
+#                            sandbox depends on.
+
+[Install]
+WantedBy=multi-user.target

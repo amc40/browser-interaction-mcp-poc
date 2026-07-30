@@ -1,0 +1,50 @@
+---
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: "{{ app_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ mcp_service_group }}"
+    mode: "0750"
+
+# Not a `.env` file in the checkout: settings.py reads `.env` relative to the
+# working directory and forbids unknown BROWSER_MCP_* keys, so one stray key
+# there is a startup failure and, under systemd, a restart loop. systemd reads
+# this as root before dropping privileges, so nothing else needs to see it
+# (docs/deployment.md §5).
+- name: Install the environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ mcp_environment_file }}"
+    owner: "{{ mcp_service_user }}"
+    group: "{{ mcp_service_group }}"
+    mode: "0600"
+  no_log: true  # it holds the OAuth client secret
+  notify: Restart browser-interaction-mcp
+
+# The unit's WorkingDirectory is the state directory, so a `.env` would only be
+# read from there — but the checkout is the place someone would put one out of
+# habit, and the failure it causes is a boot loop.
+- name: Ensure no .env shadows the environment file
+  ansible.builtin.file:
+    path: "{{ item }}/.env"
+    state: absent
+  loop:
+    - "{{ mcp_checkout_dir }}"
+    - "{{ mcp_state_dir }}"
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: app.service.j2
+    dest: /etc/systemd/system/{{ mcp_systemd_unit }}.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart browser-interaction-mcp
+
+- name: Enable and start the server
+  ansible.builtin.systemd_service:
+    name: "{{ mcp_systemd_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true

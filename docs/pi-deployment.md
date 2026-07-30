@@ -1,6 +1,9 @@
 # Deploying to a Raspberry Pi as a claude.ai connector
 
-**Status: planned, not implemented.** Nothing here is built yet.
+**Status: planned, partly built.** The provisioning playbook this document
+specifies now exists in [`deploy/`](../deploy/README.md), drafted but never run
+against real hardware. Nothing else here is built: the server still has no
+browser actions to deploy.
 
 [`deployment.md`](deployment.md) lists *what must change* before this runs on a
 server, independently of where that server is. This document picks the where,
@@ -147,6 +150,10 @@ Further notes specific to this board:
 
 ## Provisioning with Ansible
 
+The playbook implementing this section is in [`deploy/`](../deploy/README.md),
+which also records the two ordering-driven departures from the role table below
+and the mitigations no playbook can apply until the code exposes them.
+
 Agentless, so the control node is a laptop and the Pi needs only SSH and a
 system `python3`. Raspberry Pi OS Bookworm ships 3.11, which satisfies Ansible's
 target-side requirement; that is unrelated to the 3.13 the application needs,
@@ -202,7 +209,7 @@ libraries Chromium needed.
 | Serve over HTTP | `BROWSER_MCP_TRANSPORT=http` | `settings.py:33` defaults to stdio; the `run` target in the `Makefile` is stdio-only |
 | Public OAuth base URL | `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` | Already supported; see [above](#what-the-tunnel-changes-about-authentication) |
 | Browser actions | `tools.py` | Currently only `server_info`; the deployment is untested against real browser work until these exist |
-| Playbook | `deploy/` | One app, one host — a second repository buys nothing at this size |
+| Playbook | `deploy/` | Done: one app, one host — a second repository buys nothing at this size |
 
 Authentication needs no code change: it landed with SDR 0001.
 

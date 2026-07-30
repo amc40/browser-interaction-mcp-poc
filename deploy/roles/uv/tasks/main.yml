@@ -1,0 +1,80 @@
+---
+- name: Create the uv cache and Python directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ uv_cache_dir }}"
+    - "{{ uv_python_install_dir }}"
+
+- name: Read the installed uv version
+  ansible.builtin.command: "{{ uv_install_dir }}/uv --version"
+  register: uv_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install uv
+  when: uv_installed.rc != 0 or uv_version not in uv_installed.stdout
+  block:
+    - name: Download the pinned uv installer
+      ansible.builtin.get_url:
+        url: https://astral.sh/uv/{{ uv_version }}/install.sh
+        dest: /root/uv-install-{{ uv_version }}.sh
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Run the uv installer
+      ansible.builtin.command: /root/uv-install-{{ uv_version }}.sh
+      environment:
+        UV_INSTALL_DIR: "{{ uv_install_dir }}"
+        INSTALLER_NO_MODIFY_PATH: "1"
+      register: uv_install
+      changed_when: uv_install.rc == 0
+  always:
+    - name: Remove the installer
+      ansible.builtin.file:
+        path: /root/uv-install-{{ uv_version }}.sh
+        state: absent
+
+# Root-owned on purpose: the service account reads its own code and cannot
+# rewrite it.
+- name: Check out the application
+  ansible.builtin.git:
+    repo: "{{ mcp_repo_url }}"
+    dest: "{{ mcp_checkout_dir }}"
+    version: "{{ mcp_repo_version }}"
+    depth: 1
+    single_branch: true
+  notify: Restart browser-interaction-mcp
+
+- name: Ensure the checkout is root-owned
+  ansible.builtin.file:
+    path: "{{ mcp_checkout_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# --frozen respects uv.lock and fails rather than silently resolving something
+# else; --no-dev omits ruff, mypy and the audit tooling, which have no purpose
+# here.
+- name: Sync the environment from the lockfile
+  ansible.builtin.command: "{{ uv_install_dir }}/uv sync --frozen --no-dev"
+  args:
+    chdir: "{{ mcp_checkout_dir }}"
+  environment:
+    UV_CACHE_DIR: "{{ uv_cache_dir }}"
+    UV_PYTHON_INSTALL_DIR: "{{ uv_python_install_dir }}"
+    UV_PYTHON_DOWNLOADS: automatic
+  register: uv_sync
+  # uv reports its work on stderr, and says "Audited N packages" when there was
+  # nothing to do.
+  changed_when: >-
+    (uv_sync.stdout ~ uv_sync.stderr)
+    is search('Installed|Uninstalled|Creating virtual environment')
+  notify: Restart browser-interaction-mcp

@@ -1,0 +1,57 @@
+---
+- name: Assert the SSD has been identified
+  ansible.builtin.assert:
+    that:
+      - storage_ssd_uuid | length > 0
+    fail_msg: >-
+      Set storage_ssd_uuid to the filesystem UUID of the SSD (`lsblk -f` on the
+      Pi), or set storage_mount_ssd: false if the system already boots from it.
+    quiet: true
+  when: storage_mount_ssd | bool
+
+- name: Create the SSD mountpoint
+  ansible.builtin.file:
+    path: "{{ mcp_ssd_mountpoint }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: storage_mount_ssd | bool
+
+- name: Mount the SSD
+  ansible.posix.mount:
+    path: "{{ mcp_ssd_mountpoint }}"
+    src: UUID={{ storage_ssd_uuid }}
+    fstype: "{{ storage_ssd_fstype }}"
+    opts: "{{ storage_ssd_options }}"
+    state: mounted
+  when: storage_mount_ssd | bool
+
+# Everything the server writes constantly lives here: the browser profile and
+# cache, which is what kills SD cards, and the OAuth store, which holds upstream
+# GitHub tokens at rest and therefore wants deliberate permissions rather than
+# whatever it inherits (docs/deployment.md §3).
+- name: Create the service account's state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ mcp_service_user }}"
+    group: "{{ mcp_service_group }}"
+    mode: "0700"
+  loop:
+    - "{{ mcp_state_dir }}"
+    - "{{ mcp_state_dir }}/cache"
+    - "{{ mcp_state_dir }}/data"
+    - "{{ mcp_state_dir }}/data/fastmcp"
+    - "{{ mcp_state_dir }}/browser-profile"
+
+# Downloaded browsers are not secret and not written at runtime, so they are
+# shared and root-owned: the service account reads them and cannot replace the
+# binary it is about to execute.
+- name: Create the Playwright browsers directory
+  ansible.builtin.file:
+    path: "{{ mcp_browsers_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"

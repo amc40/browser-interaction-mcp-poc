@@ -1,0 +1,11 @@
+---
+profile: production
+
+exclude_paths:
+  - collections/
+
+# Every play and role here targets one host, so `hosts: browser_mcp` is not a
+# wildcard problem, and the roles are local to this repository rather than
+# Galaxy-published.
+skip_list:
+  - galaxy  # no galaxy.yml: these roles are not published anywhere

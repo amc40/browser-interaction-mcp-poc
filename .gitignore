@@ -16,3 +16,8 @@ htmlcov/
 # Local configuration and credentials
 .env
 *.pem
+
+# Ansible
+deploy/collections/
+deploy/inventory/group_vars/*/vault.yml
+deploy/*.vault-pass

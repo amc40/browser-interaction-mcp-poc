@@ -1,0 +1,30 @@
+---
+# Copy to vault.yml, fill in, then encrypt it and never decrypt it into the
+# working tree:
+#
+#   cp vault.example.yml vault.yml
+#   $EDITOR vault.yml
+#   ansible-vault encrypt vault.yml
+#
+# Edit it afterwards with `ansible-vault edit vault.yml`, which decrypts to a
+# temporary file rather than to the checkout. vault.yml is gitignored either
+# way, and the repository has a gitleaks gate, but neither is a reason to write
+# a plaintext secret into the tree in the first place.
+
+# GitHub OAuth app (https://github.com/settings/developers). Its callback URL
+# must be https://<mcp_public_hostname>/auth/callback — the loopback callback
+# in the README is for local development only.
+vault_mcp_github_client_id: Ov23liREPLACEME
+vault_mcp_github_client_secret: REPLACEME
+
+# The named tunnel's UUID, from `cloudflared tunnel create <name>` on a machine
+# logged in to Cloudflare.
+vault_mcp_tunnel_id: 00000000-0000-0000-0000-000000000000
+
+# The contents of the credentials file that command wrote, as a mapping. It
+# lands on the Pi at /etc/cloudflared/<tunnel-id>.json, mode 0600.
+vault_mcp_tunnel_credentials:
+  AccountTag: REPLACEME
+  TunnelID: 00000000-0000-0000-0000-000000000000
+  TunnelName: browser-interaction-mcp
+  TunnelSecret: REPLACEME

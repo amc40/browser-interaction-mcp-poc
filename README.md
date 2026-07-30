@@ -16,7 +16,9 @@ place. No browser is driven yet — see [Not done yet](#not-done-yet).
 Running it as a claude.ai connector, on a Raspberry Pi behind a Cloudflare
 Tunnel, is planned but not built. The target, the options rejected on the way to
 it, and what that topology asks of the configuration are in
-[`docs/pi-deployment.md`](docs/pi-deployment.md).
+[`docs/pi-deployment.md`](docs/pi-deployment.md); the Ansible playbook that
+would provision it is drafted in [`deploy/`](deploy/README.md), and has never
+been run against real hardware.
 
 ## Getting started
 
@@ -106,6 +108,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/sdr/` | Design records for decisions worth their own argument |
 | `docs/deployment.md` | What would have to change before this runs on a server |
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
+| `deploy/` | The Ansible playbook that provisions that host |
 
 ### Adding a browser action
 

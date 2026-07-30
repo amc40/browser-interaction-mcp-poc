@@ -1,0 +1,47 @@
+---
+# Disabling password authentication on a host that has no key installed
+# anywhere would end the only way back in, and this is a headless board that
+# may be somewhere inconvenient. Check first.
+- name: Look for an existing authorized_keys file
+  ansible.builtin.find:
+    paths:
+      - /home
+      - /root
+    patterns: authorized_keys
+    recurse: true
+    hidden: true
+    size: 1
+  register: base_authorized_keys
+
+- name: Assert at least one key is installed before disabling passwords
+  ansible.builtin.assert:
+    that:
+      - base_authorized_keys.matched | int > 0
+    fail_msg: >-
+      No non-empty authorized_keys file was found under /home or /root.
+      Install your public key first (ssh-copy-id), or set
+      base_harden_ssh: false — disabling password authentication now would
+      leave no way back in.
+    quiet: true
+
+- name: Ensure sshd reads its drop-in directory
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    line: Include /etc/ssh/sshd_config.d/*.conf
+    regexp: ^\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf\s*$
+    insertbefore: BOF
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd
+
+- name: Install the SSH hardening drop-in
+  ansible.builtin.template:
+    src: 10-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd

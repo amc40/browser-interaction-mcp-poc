@@ -1,0 +1,68 @@
+---
+# Deployment-wide facts. Anything role-local lives in that role's
+# defaults/main.yml instead; anything secret lives in vault.yml, encrypted with
+# ansible-vault, and is referenced here through a `vault_`-prefixed name so that
+# it is obvious at a glance which values are secret.
+
+# --- Identity -------------------------------------------------------------
+# The service account. Unprivileged, no interactive login, nothing else
+# co-located with it: shell access on this host is equivalent to full control
+# of every account the server automates (docs/deployment.md §6).
+mcp_service_user: browsermcp
+mcp_service_group: browsermcp
+
+# The systemd unit's name, shared because the tunnel unit orders itself after
+# it. Distinct from the console script `uv` installs into the venv, which is
+# named by the application's pyproject.toml.
+mcp_systemd_unit: browser-interaction-mcp
+
+# --- Paths ----------------------------------------------------------------
+# The checkout is root-owned and read-only to the service account, so the
+# server cannot rewrite its own code.
+mcp_repo_url: https://github.com/amc40/browser-interaction-mcp-poc.git
+mcp_repo_version: main
+mcp_checkout_dir: /opt/browser-interaction-mcp
+
+# Everything that gets written constantly lives on the SSD. An always-on
+# Chromium writes to its profile and cache hard enough to kill an SD card.
+mcp_ssd_mountpoint: /mnt/ssd
+mcp_state_dir: "{{ mcp_ssd_mountpoint }}/browser-interaction-mcp"
+mcp_browsers_dir: "{{ mcp_ssd_mountpoint }}/playwright"
+
+# Read by systemd as root before privileges are dropped, so it never has to be
+# readable by anything else. Outside the git tree on purpose: settings.py reads
+# `.env` relative to the working directory and forbids unknown BROWSER_MCP_*
+# keys, which under systemd restart would be a boot loop.
+mcp_environment_file: /etc/browser-interaction-mcp/env
+
+# --- Server settings ------------------------------------------------------
+# Loopback only. cloudflared dials localhost, so the server never binds a
+# routable interface (docs/deployment.md §1).
+mcp_bind_host: 127.0.0.1
+mcp_port: 8000
+mcp_log_level: INFO
+mcp_rate_limit_per_second: 1.0
+mcp_rate_limit_burst: 5
+
+# The one GitHub account allowed to call tools, as its numeric user ID.
+mcp_github_user_id: "36701168"
+# Revocation delay: a token revoked on GitHub keeps working until its cache
+# entry expires. Shorter than the 300s default because this endpoint is
+# reachable from the internet.
+mcp_github_token_cache_seconds: 60
+
+# --- Public endpoint ------------------------------------------------------
+# The named tunnel's hostname, on a domain you own. Not a trycloudflare.com
+# quick tunnel: claude.ai stores the connector URL, and quick-tunnel hostnames
+# change on every restart.
+mcp_public_hostname: mcp.example.com
+# TLS terminates at Cloudflare's edge, so FastMCP has to be told the public
+# https URL explicitly — it decides whether to mark OAuth cookies `Secure` by
+# testing this string, not by reading forwarded headers.
+mcp_oauth_base_url: "https://{{ mcp_public_hostname }}"
+
+# --- Secrets, from vault.yml ----------------------------------------------
+mcp_github_client_id: "{{ vault_mcp_github_client_id }}"
+mcp_github_client_secret: "{{ vault_mcp_github_client_secret }}"
+mcp_tunnel_id: "{{ vault_mcp_tunnel_id }}"
+mcp_tunnel_credentials: "{{ vault_mcp_tunnel_credentials }}"

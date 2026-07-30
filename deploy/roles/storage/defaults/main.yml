@@ -1,0 +1,13 @@
+---
+# Set false if the whole system already boots from the SSD, in which case there
+# is nothing to mount and the directories below are already off the SD card.
+storage_mount_ssd: true
+
+# Mount by UUID, never by /dev/sda1: USB enumeration order is not stable, and a
+# second stick would silently take the name. Find it with `lsblk -f`.
+storage_ssd_uuid: ""
+storage_ssd_fstype: ext4
+# nofail so a missing or unplugged SSD does not leave the Pi stuck in the
+# initramfs; the app unit has RequiresMountsFor and will refuse to start
+# instead, which is the failure mode you can actually diagnose remotely.
+storage_ssd_options: defaults,noatime,nofail,x-systemd.device-timeout=30
