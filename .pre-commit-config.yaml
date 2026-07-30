@@ -1,0 +1,94 @@
+# Local checks that mirror CI. Install with `uv run pre-commit install
+# --install-hooks --hook-type pre-commit --hook-type pre-push`.
+#
+# The Python gates run as `local` hooks through `uv run --frozen` so that the
+# versions used here are exactly the ones pinned in uv.lock, rather than a
+# second set of versions pinned to hook revisions that can drift apart.
+default_install_hook_types: [pre-commit, pre-push]
+default_language_version:
+  python: python3.13
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  # Secret scanning: this server runs with personal credentials, so a leaked
+  # token is the worst realistic failure mode.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.0
+    hooks:
+      # Fail if pyproject.toml and uv.lock have drifted apart.
+      - id: uv-lock
+
+  # Static analysis of the GitHub Actions workflows themselves.
+  - repo: https://github.com/woodruffw/zizmor-pre-commit
+    rev: v1.28.0
+    hooks:
+      - id: zizmor
+        # Offline locally: the audits that need the GitHub API run in CI, where
+        # a token is available.
+        args: [--offline]
+
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --frozen ruff format --check
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --frozen ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy
+        entry: uv run --frozen mypy
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+
+      - id: deptry
+        name: deptry
+        entry: uv run --frozen deptry src tests
+        language: system
+        files: ^(src|tests)/.*\.py$|^pyproject\.toml$
+        pass_filenames: false
+        require_serial: true
+
+      # Slower gates: on push only, so committing stays fast.
+      - id: pytest
+        name: pytest
+        entry: uv run --frozen pytest --cov
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        require_serial: true
+
+      - id: pip-audit
+        name: pip-audit
+        entry: scripts/audit.sh
+        language: script
+        stages: [pre-push]
+        pass_filenames: false
+        require_serial: true
