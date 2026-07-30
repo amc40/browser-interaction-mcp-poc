@@ -9,9 +9,9 @@ A proof of concept for building an unofficial MCP for a service that I interact 
 
 ## Status
 
-The [FastMCP](https://gofastmcp.com) server is scaffolded and runnable, with the
-rate limiting and the in-code tool registration in place. **Authentication is not
-implemented yet** — see [Not done yet](#not-done-yet).
+The [FastMCP](https://gofastmcp.com) server is scaffolded and runnable, with
+GitHub authentication, the rate limiting and the in-code tool registration in
+place. No browser is driven yet — see [Not done yet](#not-done-yet).
 
 ## Getting started
 
@@ -19,7 +19,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 
 ```sh
 make install          # sync the environment and install the git hooks
-make run              # serve on stdio
+make run              # serve on stdio (unauthenticated - see below)
 make check            # run every quality gate
 ```
 
@@ -36,15 +36,51 @@ To point an MCP client at it:
 }
 ```
 
+## Authentication
+
+Every tool is restricted to one GitHub account. That is applied as middleware,
+so a tool is covered the moment it is registered — there is no per-tool
+decorator to forget — and an unauthorised caller is not even shown the tool
+list.
+
+Authentication is [FastMCP's `GitHubProvider`](https://gofastmcp.com/servers/auth/oauth-proxy):
+clients run a normal GitHub OAuth flow, and the resulting token is verified
+against the GitHub API on every request. Authorisation is a one-function check
+comparing the token's `login` claim to `BROWSER_MCP_GITHUB_LOGIN`, which
+defaults to the repository owner.
+
+**This only works over the http transport.** MCP carries credentials in HTTP
+headers, and stdio has no headers — it is a pipe to a subprocess, so its trust
+boundary is local shell access and nothing more. FastMCP skips its auth checks
+there, and this server does not override that. **On stdio, anyone with local
+shell access can call every tool.** The reasoning, and the alternative that was
+built and rejected, are in [SDR 0001](docs/sdr/0001-github-authentication.md).
+
+To serve authenticated, [register a GitHub OAuth
+app](https://github.com/settings/developers) with the callback URL
+`http://127.0.0.1:8000/auth/callback`, then set:
+
+```sh
+BROWSER_MCP_TRANSPORT=http
+BROWSER_MCP_GITHUB_CLIENT_ID=Ov23li...
+BROWSER_MCP_GITHUB_CLIENT_SECRET=...
+```
+
+Starting on http without both credentials is a startup error rather than an
+unauthenticated server. Point a client at `http://127.0.0.1:8000/mcp` and it
+will prompt for the OAuth flow on first connect.
+
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
 | `src/browser_interaction_mcp/server.py` | Builds the server: middleware, instructions, tool registration |
 | `src/browser_interaction_mcp/tools.py` | Every exposed tool. New browser actions go here |
+| `src/browser_interaction_mcp/auth.py` | Who may use the server: the OAuth provider and the login check |
 | `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting |
 | `src/browser_interaction_mcp/settings.py` | Configuration, from `BROWSER_MCP_*` env vars or `.env` |
 | `src/browser_interaction_mcp/__main__.py` | The `browser-interaction-mcp` console script |
+| `docs/sdr/` | Design records for decisions worth their own argument |
 
 ### Adding a browser action
 
@@ -88,10 +124,9 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 
 ## Not done yet
 
-- **Authentication.** Anyone who can reach the server can call it. On stdio that
-  means anyone with local shell access; the http transport binds to loopback by
-  default for the same reason. The GitHub App idea from the requirements above
-  is unimplemented.
+- **Authentication on stdio**, which cannot carry credentials at all. The http
+  transport binds to loopback by default for the same reason. See
+  [SDR 0001](docs/sdr/0001-github-authentication.md).
 - **Browser automation.** No browser is driven yet — `tools.py` has a single
   `server_info` tool and the extension point for real actions.
 - **Persistent credential storage** for the service being automated.

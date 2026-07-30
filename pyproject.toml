@@ -60,6 +60,8 @@ ignore = [
     "D103",    # a test's name is its documentation
     "PLR2004", # magic values are fine in assertions
     "S101",    # asserts are the point of a test
+    "S105",    # the credentials in tests are fakes, and gitleaks checks the rest
+    "S106",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]
