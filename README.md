@@ -13,6 +13,11 @@ The [FastMCP](https://gofastmcp.com) server is scaffolded and runnable, with
 GitHub authentication, the rate limiting and the in-code tool registration in
 place. No browser is driven yet — see [Not done yet](#not-done-yet).
 
+Running it as a claude.ai connector, on a Raspberry Pi behind a Cloudflare
+Tunnel, is planned but not built. The target, the options rejected on the way to
+it, and what that topology asks of the configuration are in
+[`docs/pi-deployment.md`](docs/pi-deployment.md).
+
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -100,6 +105,7 @@ fact that shell access on the host bypasses all of this.
 | `src/browser_interaction_mcp/__main__.py` | The `browser-interaction-mcp` console script |
 | `docs/sdr/` | Design records for decisions worth their own argument |
 | `docs/deployment.md` | What would have to change before this runs on a server |
+| `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 
 ### Adding a browser action
 
