@@ -13,6 +13,10 @@ The [FastMCP](https://gofastmcp.com) server is scaffolded and runnable, with the
 rate limiting and the in-code tool registration in place. **Authentication is not
 implemented yet** — see [Not done yet](#not-done-yet).
 
+Running it as a claude.ai connector, on a Raspberry Pi behind a Cloudflare
+Tunnel, is planned but not built; the design and its prerequisites are written
+up in [`docs/deployment.md`](docs/deployment.md).
+
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/).
