@@ -70,6 +70,14 @@ Starting on http without both credentials is a startup error rather than an
 unauthenticated server. Point a client at `http://127.0.0.1:8000/mcp` and it
 will prompt for the OAuth flow on first connect.
 
+This is a loopback, single-process, single-user setup, and several of the
+defaults it relies on are only safe because of that.
+[`docs/deployment.md`](docs/deployment.md) lists the mitigations a real
+deployment would need first — TLS and the base URL, pinning identity to the
+GitHub user ID rather than the login, token-verification caching, ownership of
+the OAuth state, and the fact that shell access on the host bypasses all of
+this.
+
 ## Layout
 
 | Path | Purpose |
@@ -81,6 +89,7 @@ will prompt for the OAuth flow on first connect.
 | `src/browser_interaction_mcp/settings.py` | Configuration, from `BROWSER_MCP_*` env vars or `.env` |
 | `src/browser_interaction_mcp/__main__.py` | The `browser-interaction-mcp` console script |
 | `docs/sdr/` | Design records for decisions worth their own argument |
+| `docs/deployment.md` | What would have to change before this runs on a server |
 
 ### Adding a browser action
 

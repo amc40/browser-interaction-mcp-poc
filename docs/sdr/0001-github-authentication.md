@@ -77,3 +77,8 @@ shell access can already read. It looks like authentication without adding any.
   budget that is shared server-wide.
 - Anyone the operator would not hand a shell to should not be given one. On
   stdio that is now the whole of the access control.
+- This decision assumes the server runs on the operator's own machine, on
+  loopback, as a single process. Deploying it anywhere else invalidates that
+  assumption — including the stdio reasoning above, since shell access would no
+  longer be the operator's alone. [`docs/deployment.md`](../deployment.md) lists
+  what would have to change first.
