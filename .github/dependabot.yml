@@ -20,9 +20,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Only default-days is supported here; the semver-* cooldown keys are
+    # rejected for the github-actions ecosystem.
     cooldown:
       default-days: 7
-      semver-major-days: 14
     groups:
       actions:
         patterns: ["*"]
