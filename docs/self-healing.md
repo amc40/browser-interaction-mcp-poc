@@ -111,6 +111,48 @@ reviewed against real bundles rather than trusted in advance.
 The bundle never enters the repository and is never inlined into a PR. It goes
 to short-retention storage; the PR carries an identifier.
 
+#### Bundle contents
+
+Precisely this, and nothing else:
+
+| Path | What it is | Why the agent needs it |
+| --- | --- | --- |
+| `manifest.json` | Failure class, fingerprint, tool name, step index, the **locator id** that failed and its deployed value, server git SHA, package version, Playwright and browser versions, viewport, timestamp, attempt number, redaction-profile version | Triage and dedupe happen from this file alone, without opening the rest |
+| `error.txt` | Exception type, message, traceback | Playwright's timeout text names the resolved selector and the wait chain |
+| `dom/pre.html` | DOM snapshot from the action *before* the failing one | The state a working locator has to match — the single most load-bearing file |
+| `dom/fail.html` | DOM at failure | Distinguishes "the element moved" from "a dialog is covering it" |
+| `screenshot/pre.png`, `screenshot/fail.png` | Full-page, redacted | Reviewer evidence, and the model reads rendered UI well enough to use them |
+| `console.log` | Browser console for the step | Catches the app throwing before it ever rendered the target |
+| `network.jsonl` | Method, path, status, resource type, timing | Catches "the XHR 500'd, so the list never populated" |
+
+`manifest.json` carries the **locator id** — the identity of a row in the locator
+table — not a selector supplied by a caller. That id is what the fix edits.
+
+`network.jsonl` earns its place mostly by *preventing* heals: a 500 or a 401
+among the step's requests is the triage signal that the locator was never the
+problem.
+
+The redactor works by allowlist, not blocklist, because a blocklist cannot
+anticipate what a given site puts in its own attributes:
+
+- **Attributes kept:** `id`, `class`, `role`, `aria-*`, `data-testid`, `name`,
+  `type`, `alt`, `title`, `placeholder`, and `href` reduced to its path.
+  Everything else is dropped, including app-specific `data-*` — a blocklist
+  would have to know that `data-account-email` exists before it could remove it.
+- **Never present:** cookies, `localStorage`, `sessionStorage`, IndexedDB,
+  `Authorization` / `Cookie` / `Set-Cookie` headers, request and response
+  bodies, and URL query strings and fragments — session tokens ride in both.
+- **Always scrubbed regardless of subtree:** `value` on inputs, `textarea`
+  contents, and `contenteditable` text.
+- **Text nodes** survive only inside the failing action's ancestor chain and its
+  subtree — the heuristic discussed above, and the part to check against real
+  bundles rather than trust in advance.
+
+A trace of any size is far too large to pass inline, so the bundle is uploaded
+and only `manifest.json` plus the bundle id travel with the trigger. That split
+is useful rather than merely necessary: triage reads the manifest and can decline
+to fetch the bundle at all.
+
 ### How a proposal is verified
 
 This is the hard part, because I1 removes the obvious answer. An agent that
@@ -161,6 +203,70 @@ no credentials to escalate with, no route to the site, and no path to `main` —
 the worst outcome of a successful injection is a bad PR, which is the same
 outcome as a bad guess. That containment is a consequence of I1 and I2, and it
 is the main reason to keep them structural.
+
+## How the session is started
+
+The ephemeral off-host job is not hypothetical infrastructure — Claude Code
+cloud sessions can be triggered programmatically, and their configuration
+surface maps onto the invariants closely enough to be worth designing against.
+
+**A routine with an API trigger.** A routine is a saved prompt plus repositories,
+a cloud environment, and a connector list; an API trigger gives it an endpoint
+the Pi can POST to with a bearer token, which starts a session and returns its
+id. That is the whole integration on the Pi's side: upload the bundle, POST the
+manifest. (Routines are a research preview, and the endpoint ships behind a
+dated beta header, so treat the exact shape as liable to change.)
+
+Three properties of that surface do real work here:
+
+- **Fire text is already treated as untrusted.** The text posted with the
+  trigger arrives wrapped and labelled as untrusted data, and the routine's saved
+  prompt has to opt into acting on it. This is exactly the posture the DOM
+  content needs — the platform's default matches the threat model rather than
+  having to be argued into it — and it means a leaked trigger token yields
+  labelled data, not instructions.
+- **Network access is a first-class environment setting**, with `None` as an
+  available level. `None` is the honest expression of I1: no outbound
+  connections through the session's network at all. Two documented carve-outs
+  survive it, and both happen to be wanted — GitHub goes through a separate
+  proxy, and the Anthropic API stays reachable, which is the same inherent
+  exfiltration channel noted above.
+- **GitHub credentials never enter the VM.** A proxy swaps a scoped credential
+  for the real token on the way out, `git push` is restricted to the session's
+  current working branch, and API access is scoped to repositories attached to
+  the session. For a routine, pushes to `claude/`-prefixed branches are accepted
+  and pushes elsewhere are refused if the branch is protected or carries someone
+  else's commits.
+
+That last point moves a chunk of I2 from a rule into platform mechanics: the
+agent cannot push `main` because it can only push its own working branch, and
+cannot reach an unattached repository at all. The branch ruleset and the
+manual-deploy discipline remain the parts that are still ours to hold.
+
+**The trap is connectors, not the network.** Every connector on the account is
+included in a routine by default, and a session can use every tool a connector
+exposes — writes included — without prompting. Connector traffic goes through
+Anthropic's servers rather than the session's network, so it **does not appear
+in the allowlist and is not blocked by `None`**. A Slack or Notion connector left
+enabled is an egress path for the bundle that the network setting will not show.
+The healing routine's connector list must be explicitly empty, and that is worth
+re-checking when connectors are added to the account for unrelated reasons.
+
+One tension to resolve rather than paper over: `None` means the session cannot
+fetch the bundle from a store either. Either the bundle store becomes the single
+entry in a `Custom` allowlist — one auditable host, not the target site — or the
+bundle is small enough to ride in the fire text. The former is more likely, and
+is still a far narrower grant than `Trusted`, whose default list includes most
+of the package-registry internet.
+
+**The alternative, if this outgrows a subscription-side routine**, is the Managed
+Agents API: agents and sessions as persisted API objects, per-session containers,
+`limited` networking with an explicit host allowlist, files mounted as session
+resources — which handles the bundle natively instead of needing a fetch — and
+vault credentials that are substituted at egress and never visible in the
+sandbox. It is the better-fitting platform and the heavier one. For a proof of
+concept driving one person's browser, a routine is the proportionate choice; the
+design above does not depend on which is used.
 
 ## Recommended design
 
@@ -224,7 +330,9 @@ The point of the table is that each invariant rests on an absence, not a rule.
 | I2 | The agent's token can push `heal/**` and open PRs. It cannot push `main`, cannot merge, cannot approve | Widening the token, or auto-merge on a heal branch |
 | I2 | The Pi pulls from `main` at deploy time only, driven by hand from the operator's laptop. No webhook, no polling, no agent-triggered deploy | Any pull-on-push deployment. It would turn a merged PR into an immediate change to what runs against live accounts |
 | I2 | The Pi's deploy credential is read-only, and the server loads no code from a writable path | A runtime plugin directory, or the locator file being fetched rather than deployed |
+| I1/I3 | The healing session's connector list is empty | Any connector left enabled. Connector traffic bypasses the network allowlist entirely, so this hole is invisible in the network setting |
 | I3 | Redaction runs on the Pi, before upload. Cookies and auth headers never leave | Uploading a raw trace "temporarily" to debug the redactor |
+| I3 | The bundle is not passed through environment variables | Cloud environments have no secrets store, and their variables are readable by anyone using the environment |
 | I3 | Bundles go to short-retention storage, never the repo, never a PR body | Committing a trace as a fixture without redacting it. The gitleaks gate catches credentials, not personal data |
 | I3 | Committed snapshot fixtures are redacted copies, reviewed like any other file | Treating fixtures as generated data nobody reads |
 
