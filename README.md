@@ -18,6 +18,12 @@ Tunnel, is planned but not built. The target, the options rejected on the way to
 it, and what that topology asks of the configuration are in
 [`docs/pi-deployment.md`](docs/pi-deployment.md).
 
+Browser actions go stale as pages change.
+[`docs/self-healing.md`](docs/self-healing.md) proposes a sandboxed agent that
+reads a redacted capture of the failure and opens a PR against the selectors —
+with no credentials for the automated service, no route to it, and no path to
+what the server runs.
+
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -106,6 +112,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/sdr/` | Design records for decisions worth their own argument |
 | `docs/deployment.md` | What would have to change before this runs on a server |
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
+| `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
 
 ### Adding a browser action
 
