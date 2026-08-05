@@ -11,7 +11,11 @@ from fastmcp.server.middleware.authorization import AuthMiddleware
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 
 from browser_interaction_mcp.auth import build_auth_provider, github_user_id_is
-from browser_interaction_mcp.middleware import ToolCallRateLimitingMiddleware
+from browser_interaction_mcp.middleware import (
+    SecretRedactionMiddleware,
+    ToolCallRateLimitingMiddleware,
+)
+from browser_interaction_mcp.redaction import build_redactor
 from browser_interaction_mcp.settings import Settings
 from browser_interaction_mcp.tools import register_tools
 
@@ -58,7 +62,11 @@ def build_server(settings: Settings | None = None) -> FastMCP:
         auth=build_auth_provider(settings),
     )
 
-    # Authorisation comes first: an unauthorised caller should not be able to
+    # Redaction wraps everything, so that a secret cannot escape through an
+    # error raised by any layer below it. It admits and rejects nobody, so it
+    # does not disturb the ordering the two middlewares below rely on.
+    mcp.add_middleware(SecretRedactionMiddleware(build_redactor(settings)))
+    # Authorisation comes next: an unauthorised caller should not be able to
     # spend the operator's rate-limit budget, and the budget is server-wide.
     mcp.add_middleware(
         AuthMiddleware(auth=github_user_id_is(settings.github_user_id)),

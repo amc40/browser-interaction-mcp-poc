@@ -106,7 +106,8 @@ fact that shell access on the host bypasses all of this.
 | `src/browser_interaction_mcp/server.py` | Builds the server: middleware, instructions, tool registration |
 | `src/browser_interaction_mcp/tools.py` | Every exposed tool. New browser actions go here |
 | `src/browser_interaction_mcp/auth.py` | Who may use the server: the OAuth provider and the login check |
-| `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting |
+| `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
+| `src/browser_interaction_mcp/redaction.py` | Keeping the server's own credentials out of logs and errors |
 | `src/browser_interaction_mcp/settings.py` | Configuration, from `BROWSER_MCP_*` env vars or `.env` |
 | `src/browser_interaction_mcp/__main__.py` | The `browser-interaction-mcp` console script |
 | `docs/sdr/` | Design records for decisions worth their own argument |
@@ -120,6 +121,38 @@ Add a function to `tools.py` and decorate it with `@mcp.tool`. Keep it
 deterministic and give it no parameter that a caller could use to reach a page,
 selector or script that you have not approved in code — that constraint is the
 whole point of the design, and nothing enforces it automatically.
+
+## Secret redaction
+
+Every credential the server holds is a `SecretStr` field on `Settings`.
+`SecretStr` keeps a value out of reprs and tracebacks, but that protection ends
+at `get_secret_value()` — past that call it is an ordinary string that can reach
+a log line or an error returned to a caller.
+
+`redaction.py` closes that gap by replacing **known values**, matched exactly,
+with a marker naming the setting they came from. It is not a secret *scanner*:
+it cannot find a credential the server was never told about, and deliberately so
+— for the values it does hold there are no false negatives and no regex to tune.
+
+Two things make it work in practice rather than in principle:
+
+- **Registration is automatic.** `build_redactor` walks `Settings` for
+  `SecretStr` fields, so adding a credential registers it. There is no list to
+  keep in sync, which is the only way this kind of layer normally fails.
+- **Encodings are covered.** A secret in a URL is percent-encoded, in a `Basic`
+  header it is base64, and in a JSON body it carries backslash escapes. Each is
+  a different string, and matching only the raw bytes is the usual way a
+  redactor is quietly wrong.
+
+It is applied in two places: a logging filter on the root handlers, which is
+what brings rendered tracebacks into scope, and middleware wrapping every tool
+call, which rewrites a failing call's message while keeping its exception type.
+Tool *results* are not covered — they are built in `tools.py` from values chosen
+there — and that stops being true for the first tool that returns page text.
+
+A value shorter than eight characters is refused rather than redacted, with a
+warning: it would occur in ordinary output by coincidence, and replacing it
+would corrupt unrelated text while advertising that something matched.
 
 ## Configuration
 
