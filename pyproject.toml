@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 license = "MIT"
 authors = [{ name = "amc40" }]
 dependencies = [
-    "fastmcp>=3.4.5,<4",
+    "fastmcp>=3.4.6,<4",
     "mcp>=1.29.0,<2",
     "pydantic>=2.13.4,<3",
     "pydantic-settings>=2.14.2,<3",
