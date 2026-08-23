@@ -15,6 +15,48 @@ if TYPE_CHECKING:
     from fastmcp.server.middleware.middleware import CallNext, MiddlewareContext
     from fastmcp.tools.base import ToolResult
 
+    from browser_interaction_mcp.redaction import SecretRedactor
+
+
+class SecretRedactionMiddleware(Middleware):
+    """Strips the server's own credentials out of failing tool calls.
+
+    Registered outermost, so it sees whatever every inner layer produced. It
+    consumes no budget and rejects nobody, so putting it ahead of authorisation
+    does not weaken the ordering that keeps unauthorised callers from spending
+    the rate limit.
+
+    This covers the error path only. Tool *results* are Pydantic models built in
+    `tools.py` from values chosen there, so nothing can reach a result that the
+    tool did not put there deliberately. That stops being true for the first
+    tool that returns page text, which is the point to extend this.
+    """
+
+    def __init__(self, redactor: SecretRedactor) -> None:
+        """Initialise the middleware.
+
+        Args:
+            redactor: The redactor to apply to errors on their way out.
+        """
+        self._redactor = redactor
+
+    @override
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequestParams],
+        call_next: CallNext[mt.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        try:
+            return await call_next(context)
+        except Exception as exc:
+            # Rewriting `args` rather than raising a new exception keeps the
+            # type, which the layers above use to decide how to report it.
+            exc.args = tuple(
+                self._redactor.redact(arg) if isinstance(arg, str) else arg
+                for arg in exc.args
+            )
+            raise
+
 
 class ToolCallRateLimitingMiddleware(Middleware):
     """Token-bucket rate limiting applied to tool calls.

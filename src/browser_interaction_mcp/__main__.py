@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from browser_interaction_mcp.redaction import build_redactor, install_log_redaction
 from browser_interaction_mcp.server import build_server
 from browser_interaction_mcp.settings import Settings
 
@@ -12,6 +13,8 @@ def main() -> None:
     """Build the server from the environment and serve until interrupted."""
     settings = Settings()
     logging.basicConfig(level=settings.log_level)
+    # After basicConfig, which is what creates the handler this attaches to.
+    install_log_redaction(build_redactor(settings))
 
     server = build_server(settings)
     if settings.transport == "http":
