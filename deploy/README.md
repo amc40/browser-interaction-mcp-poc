@@ -35,7 +35,11 @@ Elsewhere, once:
   on any machine logged in to Cloudflare — and its DNS route:
   `cloudflared tunnel route dns <tunnel-id> <your-host>`. Neither is automated
   here: both are one-off account-level operations that want a human and a
-  browser login, not a playbook.
+  browser login, not a playbook. That command writes the credentials
+  `vault_mcp_tunnel_credentials` needs to `~/.cloudflared/<tunnel-id>.json` —
+  the *home directory of whatever account ran it* (`/root/.cloudflared/` if
+  that was via sudo) — not `/etc/cloudflared/`, which doesn't exist until the
+  `tunnel` role creates it. See `vault.example.yml` for the exact fields.
 
 ## Two phases: SD card first, SSD later
 

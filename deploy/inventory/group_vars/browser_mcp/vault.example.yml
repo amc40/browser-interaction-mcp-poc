@@ -21,8 +21,18 @@ vault_mcp_github_client_secret: REPLACEME
 # logged in to Cloudflare.
 vault_mcp_tunnel_id: 00000000-0000-0000-0000-000000000000
 
-# The contents of the credentials file that command wrote, as a mapping. It
-# lands on the Pi at /etc/cloudflared/<tunnel-id>.json, mode 0600.
+# The contents of the credentials file that command wrote, as a mapping.
+#
+# `cloudflared tunnel create` writes it to ~/.cloudflared/<tunnel-id>.json —
+# the HOME of whichever account ran the command (so /root/.cloudflared/ if
+# that was via sudo) — not to /etc/cloudflared/. /etc/cloudflared/ is where
+# the *tunnel role* puts its own copy, generated from what's below, once you
+# run the playbook; it won't exist before that, and isn't where you go
+# looking for the original.
+#
+# Copy every key from that JSON file here verbatim, same casing: the tunnel
+# role serialises this mapping straight back to JSON (`| to_nice_json`), so it
+# has to match what cloudflared itself wrote.
 vault_mcp_tunnel_credentials:
   AccountTag: REPLACEME
   TunnelID: 00000000-0000-0000-0000-000000000000
