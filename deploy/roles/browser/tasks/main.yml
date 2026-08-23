@@ -10,9 +10,10 @@
     state: present
   when: browser_install_xvfb | bool
 
-# The application does not depend on Playwright yet — tools.py exposes only
-# server_info, and browser automation is still on the "not done yet" list. Rather
-# than fail on a checkout that is correct for today, detect it and say so.
+# Playwright is a dependency as of the sainsburys_products_we_love tool, but
+# this still checks rather than assumes: a checkout pinned to an older commit
+# (mcp_repo_version) legitimately might not have it, and failing outright
+# would block provisioning that commit at all. Detect it and say so instead.
 - name: Check whether Playwright is in the synced environment
   ansible.builtin.command: "{{ mcp_checkout_dir }}/.venv/bin/python -c 'import playwright'"
   register: browser_playwright_present

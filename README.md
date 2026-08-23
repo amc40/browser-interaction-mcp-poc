@@ -11,14 +11,22 @@ A proof of concept for building an unofficial MCP for a service that I interact 
 
 The [FastMCP](https://gofastmcp.com) server is scaffolded and runnable, with
 GitHub authentication, the rate limiting and the in-code tool registration in
-place. No browser is driven yet — see [Not done yet](#not-done-yet).
+place. One browser action exists —
+`sainsburys_products_we_love`, reading Sainsbury's public groceries homepage —
+verified against the real page from the deployment host. Getting there
+surfaced a real constraint worth knowing before adding a second action:
+Sainsbury's (and Tesco, tested for comparison) run Akamai Bot Manager, which
+blocks *headless* Chromium specifically, regardless of network origin or user
+agent. `browser_interaction_mcp.browser.browser_page(headless=False)` runs a
+real, visible-mode Chromium under a short-lived Xvfb display instead, which
+gets through cleanly - see that module and `sainsburys.py`'s docstrings. See
+[Not done yet](#not-done-yet).
 
-Running it as a claude.ai connector, on a Raspberry Pi behind a Cloudflare
-Tunnel, is planned but not built. The target, the options rejected on the way to
-it, and what that topology asks of the configuration are in
+It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
+Tunnel. The target, the options rejected on the way to it, and what that
+topology asks of the configuration are in
 [`docs/pi-deployment.md`](docs/pi-deployment.md); the Ansible playbook that
-would provision it is drafted in [`deploy/`](deploy/README.md), and has never
-been run against real hardware.
+provisions it is in [`deploy/`](deploy/README.md).
 
 Browser actions go stale as pages change.
 [`docs/self-healing.md`](docs/self-healing.md) proposes a sandboxed agent that
@@ -107,6 +115,8 @@ fact that shell access on the host bypasses all of this.
 | --- | --- |
 | `src/browser_interaction_mcp/server.py` | Builds the server: middleware, instructions, tool registration |
 | `src/browser_interaction_mcp/tools.py` | Every exposed tool. New browser actions go here |
+| `src/browser_interaction_mcp/browser.py` | Shared browser/page setup for every action, headless or headed |
+| `src/browser_interaction_mcp/sainsburys.py` | Browser actions against Sainsbury's public groceries site |
 | `src/browser_interaction_mcp/auth.py` | Who may use the server: the OAuth provider and the login check |
 | `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
 | `src/browser_interaction_mcp/redaction.py` | Keeping the server's own credentials out of logs and errors |
@@ -117,6 +127,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
+| `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
 
 ### Adding a browser action
 
@@ -195,6 +206,4 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 - **Authentication on stdio**, which cannot carry credentials at all. The http
   transport binds to loopback by default for the same reason. See
   [SDR 0001](docs/sdr/0001-github-authentication.md).
-- **Browser automation.** No browser is driven yet — `tools.py` has a single
-  `server_info` tool and the extension point for real actions.
 - **Persistent credential storage** for the service being automated.
