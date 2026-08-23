@@ -2,69 +2,80 @@
 
 No login is needed for any of this: the page is public, so nothing here
 touches the operator's own session or credentials.
+
+Verified against the real page from the deployment host (not this dev
+sandbox, whose network path Sainsbury's Akamai edge blocks outright - see
+docs/self-healing.md and the commit history here for how that was diagnosed).
+Two things learned there that aren't obvious from the site alone:
+
+- Akamai's Bot Manager blocks *headless* Chromium specifically - real,
+  visible-mode Chromium under a virtual display gets through cleanly with
+  the same navigation. `products_we_love` asks browser.browser_page for a
+  headed session for exactly this reason; switching it to headless will
+  reintroduce the block.
+- Product names under "Products we love" are themselves heading elements,
+  immediately following the section's own heading in document order - not
+  text pulled from the tile links.
 """
 
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
-from playwright.sync_api import Locator, Page, sync_playwright
+from browser_interaction_mcp.browser import browser_page
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Locator, Page
 
 GROCERIES_URL = "https://www.sainsburys.co.uk/gol-ui/groceries"
 
 _PRODUCTS_WE_LOVE_HEADING = re.compile("products we love", re.IGNORECASE)
 
-# The real Chromium build's own UA with the "Headless" branding stripped -
-# truthful about the engine version (avoids UA/feature mismatches), just not
-# announcing itself as an automated client. Not a fingerprint-evasion attempt:
-# new-headless Chromium still reports navigator.webdriver = true, unchanged
-# here.
-_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
+# OneTrust's own button text here is "Continue and accept" - kept broad
+# ("accept" anywhere in the name) since consent-management vendors change
+# their copy without warning, and this is scoped to a button element already.
+_COOKIE_ACCEPT_NAME = re.compile("accept", re.IGNORECASE)
 
-# Accessible names cookie-consent buttons commonly use. Best-effort: if none
-# match, the page is left as it is and the heading lookup below either finds
-# the section anyway or fails loudly.
-_COOKIE_ACCEPT_NAMES = re.compile("accept all|accept cookies", re.IGNORECASE)
-
-# Text that turns up inside a product tile but is not the product's name -
-# quantity controls, trolley actions, nutrition badges. Filtered out of
-# whatever a tile's accessible name resolves to.
-_NON_PRODUCT_TEXT = re.compile(
-    r"^(add|remove|increase|decrease|quantity|£|per |favourite)",
-    re.IGNORECASE,
-)
+# Non-product headings that can appear inside/around the carousel widget
+# (an accessible label for the carousel region, a trailing copyright-terms
+# link styled as a heading) - skipped rather than counted as products.
+_NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE)
 
 
 def _dismiss_cookie_banner(page: Page) -> None:
-    button = page.get_by_role("button", name=_COOKIE_ACCEPT_NAMES).first
+    button = page.get_by_role("button", name=_COOKIE_ACCEPT_NAME).first
     if button.count() > 0:
-        button.click(timeout=5_000)
+        button.click(timeout=15_000)
 
 
-def _find_section(page: Page) -> Locator:
-    """Return the container holding the "Products we love" carousel.
+def _heading_texts(page: Page) -> list[str]:
+    headings = page.get_by_role("heading").all()
+    return [heading.inner_text().strip() for heading in headings]
 
-    Located by heading text rather than a class name or test id: those are
-    exactly the kind of thing that changes on a redesign, per
-    docs/self-healing.md's "address by stable contract" guidance.
+
+def _names_after_heading(headings: list[str], count: int) -> list[str]:
+    """Return up to ``count`` product names following the section heading.
 
     Args:
-        page: The loaded page to search.
+        headings: Every heading's text, in document order.
+        count: How many product names to return.
 
     Returns:
-        The locator for the section beneath the heading.
+        Up to ``count`` product names, in the order they appear on the page.
 
     Raises:
-        RuntimeError: If no such heading, or no plausible container beneath
-            it, can be found.
+        RuntimeError: If no "Products we love" heading is present at all.
     """
-    heading = page.get_by_role("heading", name=_PRODUCTS_WE_LOVE_HEADING).first
-    if heading.count() == 0:
-        heading = page.get_by_text(_PRODUCTS_WE_LOVE_HEADING).first
-    if heading.count() == 0:
+    index = next(
+        (
+            i
+            for i, text in enumerate(headings)
+            if _PRODUCTS_WE_LOVE_HEADING.search(text)
+        ),
+        None,
+    )
+    if index is None:
         msg = (
             'No "Products we love" heading found on the page. Either the '
             "section has been renamed/removed, or the page did not load as "
@@ -72,28 +83,26 @@ def _find_section(page: Page) -> Locator:
         )
         raise RuntimeError(msg)
 
-    # Walk up from the heading to the nearest ancestor that actually contains
-    # several links (product tiles are normally anchors) - a proxy for "this
-    # is the carousel", not the heading's own (usually empty) wrapper.
-    container = heading.locator("xpath=ancestor::*[count(.//a) >= 3][1]").first
-    if container.count() == 0:
-        msg = (
-            'Found the "Products we love" heading but no container beneath '
-            "it with multiple links - the carousel's markup shape is not "
-            "what this action expects."
-        )
-        raise RuntimeError(msg)
-    return container
+    names: list[str] = []
+    for text in headings[index + 1 :]:
+        if not text or _NON_PRODUCT_HEADINGS.match(text) or text in names:
+            continue
+        names.append(text)
+        if len(names) == count:
+            break
+    return names
 
 
-def _item_name(tile: Locator) -> str | None:
-    """Best-effort product name for one tile: aria-label, else inner text."""
-    aria_label = tile.get_attribute("aria-label")
-    candidate = (aria_label or tile.inner_text()).strip()
-    first_line = candidate.splitlines()[0].strip() if candidate else ""
-    if not first_line or _NON_PRODUCT_TEXT.match(first_line):
-        return None
-    return first_line
+def _wait_for_page_to_settle(heading: Locator) -> None:
+    """Wait for the page to be usable, without relying on "networkidle".
+
+    The real site never reaches Playwright's networkidle state within a sane
+    timeout (some background poller keeps the network busy indefinitely), so
+    waiting for it would mean eating a full timeout on every call. Waiting for
+    the section heading itself to appear is both faster and a more direct
+    signal that the page is actually ready.
+    """
+    heading.wait_for(state="visible", timeout=20_000)
 
 
 def products_we_love(url: str = GROCERIES_URL, count: int = 5) -> list[str]:
@@ -109,29 +118,11 @@ def products_we_love(url: str = GROCERIES_URL, count: int = 5) -> list[str]:
     Raises:
         RuntimeError: If the section cannot be located on the loaded page.
     """
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        try:
-            context = browser.new_context(
-                user_agent=_USER_AGENT,
-                viewport={"width": 1366, "height": 900},
-                locale="en-GB",
-                timezone_id="Europe/London",
-                extra_http_headers={"Accept-Language": "en-GB,en;q=0.9"},
-            )
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            page.wait_for_load_state("networkidle", timeout=20_000)
-            _dismiss_cookie_banner(page)
+    with browser_page(headless=False) as page:
+        page.goto(url, wait_until="load", timeout=30_000)
+        _dismiss_cookie_banner(page)
 
-            section = _find_section(page)
-            names: list[str] = []
-            for tile in section.locator("a").all():
-                name = _item_name(tile)
-                if name and name not in names:
-                    names.append(name)
-                if len(names) == count:
-                    break
-            return names
-        finally:
-            browser.close()
+        heading = page.get_by_role("heading", name=_PRODUCTS_WE_LOVE_HEADING).first
+        _wait_for_page_to_settle(heading)
+
+        return _names_after_heading(_heading_texts(page), count)

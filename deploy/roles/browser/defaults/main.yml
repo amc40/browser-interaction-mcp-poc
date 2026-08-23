@@ -5,6 +5,10 @@
 browser_playwright_browsers:
   - chromium
 
-# The escape hatch for sites that block headless Chromium: run headed under
-# xvfb-run. Off by default because it is dead weight until it is needed.
-browser_install_xvfb: false
+# Needed by browser_interaction_mcp.browser.browser_page(headless=False):
+# Akamai's Bot Manager (Sainsbury's, Tesco - see sainsburys.py's module
+# docstring) blocks headless Chromium specifically, so any headed session
+# needs a real X display to run under. browser_page starts and stops its own
+# short-lived Xvfb display per call, using only the `Xvfb` binary this
+# installs - not the whole service wrapped in `xvfb-run`.
+browser_install_xvfb: true

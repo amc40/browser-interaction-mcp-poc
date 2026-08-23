@@ -63,6 +63,7 @@ ignore = [
     "S101",    # asserts are the point of a test
     "S105",    # the credentials in tests are fakes, and gitleaks checks the rest
     "S106",
+    "SLF001",  # unit tests reach into private helpers directly on purpose
 ]
 # One-off/exploratory scripts, not part of the tested, type-checked package:
 # mypy's `files` setting already excludes this directory, and pytest's 100%

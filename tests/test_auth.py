@@ -162,7 +162,7 @@ async def test_stdio_callers_are_waved_through(
     therefore drive the server, and this asserts exactly that.
     """
     monkeypatch.setattr(context, "_current_transport", ContextVar("transport"))
-    context._current_transport.set("stdio")  # noqa: SLF001
+    context._current_transport.set("stdio")
 
     await _call_server_info()
 
@@ -183,9 +183,9 @@ def test_http_transport_authenticates_against_github() -> None:
 
 def _token_cache(provider: GitHubProvider) -> TokenCache:
     """Return the cache the provider verifies tokens through."""
-    verifier = provider._token_validator  # noqa: SLF001
+    verifier = provider._token_validator
     assert isinstance(verifier, GitHubTokenVerifier)
-    return verifier._cache  # noqa: SLF001
+    return verifier._cache
 
 
 def _http_settings(**overrides: object) -> Settings:
@@ -209,7 +209,7 @@ def test_the_cache_lifetime_is_configurable() -> None:
     provider = build_auth_provider(_http_settings(github_token_cache_seconds=60))
 
     assert provider is not None
-    assert _token_cache(provider)._ttl == 60  # noqa: SLF001
+    assert _token_cache(provider)._ttl == 60
 
 
 def test_caching_can_be_turned_off() -> None:
