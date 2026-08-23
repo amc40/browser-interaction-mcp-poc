@@ -28,6 +28,15 @@ sudo-capable account, and the system `python3` that ships with it. The
 application's own Python 3.13 is fetched by `uv` and is unrelated, even though
 trixie happens to ship the same version system-wide.
 
+Every `ansible-playbook` command below assumes key-based SSH and only prompts
+for `--ask-become-pass` (sudo, asked *after* connecting) and
+`--ask-vault-pass` (local, decrypts `vault.yml` — unrelated to the Pi at all).
+If the Pi still needs a password to log in over SSH, add `--ask-pass` (`-k`)
+to every one of them too, for a third prompt asked *before* the other two, to
+authenticate the connection itself. The two passwords are easy to conflate
+when they happen to be the same string, as they often are for a single-user
+Pi, but they're asked at genuinely different points in the connection.
+
 Elsewhere, once:
 
 - A **GitHub OAuth app** with the callback `https://<your-host>/auth/callback`.
