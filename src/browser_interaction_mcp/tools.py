@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from browser_interaction_mcp import sainsburys
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
@@ -28,6 +30,14 @@ class ServerInfo(BaseModel):
     )
     rate_limit_burst: int = Field(
         description="Calls a client may make back-to-back before throttling.",
+    )
+
+
+class ProductsWeLove(BaseModel):
+    """Product names under Sainsbury's groceries homepage "Products we love"."""
+
+    products: list[str] = Field(
+        description='Product names, in the order shown under "Products we love".',
     )
 
 
@@ -54,3 +64,14 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
 
     # Add browser actions below, one function per action. Keep each one
     # deterministic and parameterised only by values you validate here.
+
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+    )
+    def sainsburys_products_we_love() -> ProductsWeLove:
+        """Return the first 5 product names under Sainsbury's "Products we love".
+
+        Reads the public, unauthenticated groceries homepage
+        (sainsburys.co.uk/gol-ui/groceries) - no login or credentials involved.
+        """
+        return ProductsWeLove(products=sainsburys.products_we_love())

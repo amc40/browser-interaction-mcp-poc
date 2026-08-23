@@ -133,9 +133,4 @@ known_first_party = ["browser_interaction_mcp"]
 [tool.deptry.per_rule_ignores]
 # `mcp` is only imported under `TYPE_CHECKING`, which deptry does not see, but
 # the types come straight from it so it stays a direct dependency.
-#
-# `playwright` is only used by scripts/sainsburys_products_we_love.py so far -
-# a proof of concept not yet promoted into src/, which is all deptry scans
-# (Makefile's `deptry src tests`). Drop this once a real tool in tools.py
-# depends on it too.
-DEP002 = ["mcp", "playwright"]
+DEP002 = ["mcp"]

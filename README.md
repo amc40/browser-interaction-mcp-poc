@@ -11,7 +11,12 @@ A proof of concept for building an unofficial MCP for a service that I interact 
 
 The [FastMCP](https://gofastmcp.com) server is scaffolded and runnable, with
 GitHub authentication, the rate limiting and the in-code tool registration in
-place. No browser is driven yet — see [Not done yet](#not-done-yet).
+place. One browser action exists —
+`sainsburys_products_we_love`, reading Sainsbury's public groceries homepage —
+but it has never been run against the real page: this project's dev sandbox
+sits behind network infrastructure that Sainsbury's WAF blocks outright, so it
+is unverified pending a live run from ordinary consumer/ISP egress. See
+[Not done yet](#not-done-yet).
 
 Running it as a claude.ai connector, on a Raspberry Pi behind a Cloudflare
 Tunnel, is planned but not built. The target, the options rejected on the way to
@@ -107,6 +112,7 @@ fact that shell access on the host bypasses all of this.
 | --- | --- |
 | `src/browser_interaction_mcp/server.py` | Builds the server: middleware, instructions, tool registration |
 | `src/browser_interaction_mcp/tools.py` | Every exposed tool. New browser actions go here |
+| `src/browser_interaction_mcp/sainsburys.py` | Browser actions against Sainsbury's public groceries site |
 | `src/browser_interaction_mcp/auth.py` | Who may use the server: the OAuth provider and the login check |
 | `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
 | `src/browser_interaction_mcp/redaction.py` | Keeping the server's own credentials out of logs and errors |
@@ -117,7 +123,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
-| `scripts/sainsburys_products_we_love.py` | Unverified proof of concept: first real Playwright use, not yet promoted into `tools.py` |
+| `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
 
 ### Adding a browser action
 
@@ -196,6 +202,8 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 - **Authentication on stdio**, which cannot carry credentials at all. The http
   transport binds to loopback by default for the same reason. See
   [SDR 0001](docs/sdr/0001-github-authentication.md).
-- **Browser automation.** No browser is driven yet — `tools.py` has a single
-  `server_info` tool and the extension point for real actions.
+- **Verified browser automation.** `sainsburys_products_we_love`
+  (`src/browser_interaction_mcp/sainsburys.py`) is registered and tested with
+  mocked Playwright objects, but has never actually been run against the real
+  page — see [Status](#status).
 - **Persistent credential storage** for the service being automated.

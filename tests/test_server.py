@@ -8,6 +8,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from browser_interaction_mcp import sainsburys
 from browser_interaction_mcp.server import SERVER_NAME, build_server
 from browser_interaction_mcp.settings import Settings
 
@@ -23,7 +24,10 @@ async def test_server_exposes_only_registered_tools(
     async with Client(build_server()) as client:
         tools = await client.list_tools()
 
-    assert [tool.name for tool in tools] == ["server_info"]
+    assert [tool.name for tool in tools] == [
+        "server_info",
+        "sainsburys_products_we_love",
+    ]
 
 
 async def test_server_info_reports_configuration(authenticate: Authenticate) -> None:
@@ -37,6 +41,31 @@ async def test_server_info_reports_configuration(authenticate: Authenticate) -> 
     assert result.data.rate_limit_per_second == 3.5
     assert result.data.rate_limit_burst == 7
     assert result.data.version
+
+
+async def test_sainsburys_products_we_love_wires_to_the_browser_action(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticate: Authenticate,
+) -> None:
+    """Only checks the wiring - test_sainsburys.py covers the scraping itself.
+
+    Calling the tool should reach `sainsburys.products_we_love` and wrap
+    whatever it returns.
+    """
+    authenticate()
+    monkeypatch.setattr(
+        sainsburys,
+        "products_we_love",
+        lambda: ["Chocolate Digestives 400g", "Semi Skimmed Milk 2L"],
+    )
+
+    async with Client(build_server()) as client:
+        result = await client.call_tool("sainsburys_products_we_love")
+
+    assert result.data.products == [
+        "Chocolate Digestives 400g",
+        "Semi Skimmed Milk 2L",
+    ]
 
 
 async def test_server_is_named_and_documented() -> None:

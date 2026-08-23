@@ -122,7 +122,12 @@ async def test_authorised_callers_are_shown_the_tools(
     authenticate()
 
     async with Client(build_server()) as client:
-        assert [tool.name for tool in await client.list_tools()] == ["server_info"]
+        tools = await client.list_tools()
+
+    # The exact registered set is test_server.py's concern; this only checks
+    # that an authorised caller is shown tools at all (contrast with
+    # test_unauthorised_callers_are_shown_no_tools above).
+    assert tools
 
 
 async def test_authorisation_precedes_rate_limiting(
