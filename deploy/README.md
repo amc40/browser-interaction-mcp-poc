@@ -37,12 +37,49 @@ Elsewhere, once:
   here: both are one-off account-level operations that want a human and a
   browser login, not a playbook.
 
+## Two phases: SD card first, SSD later
+
+Storage doesn't have to arrive with the Pi. `storage_mount_ssd: false` (the
+default) puts everything a running server writes — browser profile, cache,
+OAuth token store, downloaded Chromium — directly on the SD card, at
+`mcp_sd_state_dir` / `mcp_sd_browsers_dir`. Everything else in this playbook
+works identically either way; only `storage` and the two path variables it
+derives care which phase you're in.
+
+**Phase 1 (SD card only).** Nothing to configure beyond what's below —
+`storage_mount_ssd: false` is already the default. Run the playbook.
+
+**Phase 2 (SSD attached).** Once you have one: attach it, partition and
+`mkfs.ext4` it, then `lsblk -f` on the Pi for its UUID. Set
+`storage_mount_ssd: true` and `storage_ssd_uuid: <uuid>` in `vars.yml`, then:
+
+```sh
+ansible-playbook site.yml --tags migrate --ask-become-pass --ask-vault-pass
+ansible-playbook site.yml --ask-become-pass --ask-vault-pass
+```
+
+The first command mounts the SSD and copies Phase 1's state across —
+`roles/storage/tasks/migrate.yml` — stopping the service first so nothing is
+copied mid-write, and leaving the SD-card copy in place rather than deleting
+it: confirm the server actually works from the SSD before removing that by
+hand. It only runs when asked for `--tags migrate` explicitly (it's tagged
+`never` as well), so an ordinary run can never trigger it by accident, and
+running it again once already migrated is a safe no-op — it checks first and
+says so. The second command is a normal run: it finishes pointing everything
+at the SSD and restarts the service, since the migrate-only pass deliberately
+leaves that to it.
+
+If the whole system already boots from the SSD (no separate mount to manage),
+skip both: `storage_mount_ssd: false` is also correct there, and Phase 1's
+default paths just happen to already be wherever the SD-card equivalent would
+have been — no migration needed.
+
 ## Running it
 
 ```sh
 cd deploy
 $EDITOR inventory/hosts.yml                            # the Pi's address
-$EDITOR inventory/group_vars/browser_mcp/vars.yml      # SSD UUID, user ID
+$EDITOR inventory/group_vars/browser_mcp/vars.yml      # SSD UUID (Phase 2), user ID
 
 cp inventory/group_vars/browser_mcp/local.yml.example \
    inventory/group_vars/browser_mcp/local.yml
@@ -56,6 +93,19 @@ ansible-vault encrypt inventory/group_vars/browser_mcp/vault.yml
 ansible-playbook site.yml --ask-become-pass --ask-vault-pass --check --diff
 ansible-playbook site.yml --ask-become-pass --ask-vault-pass
 ```
+
+Already installed `cloudflared` and created the tunnel by hand before running
+this? That's fine — every task in the `tunnel` role uses ordinary idempotent
+Ansible modules (`apt`, `group`, `user`, `template`, `copy`, `systemd_service`)
+rather than one-shot commands, so re-running it converges rather than erroring
+or duplicating anything. The one thing it actively fixes rather than just
+tolerates: Cloudflare's own manual-install docs write an old one-line-format
+apt source that would otherwise sit alongside the one this role manages, so
+the role removes it first. It's still on you to make sure `vault.yml` holds
+the *real* tunnel ID and credentials from what you already created, not the
+placeholders from `vault.example.yml` — `site.yml` asserts that before
+touching anything, specifically because this role writes those straight over
+whatever's already at `/etc/cloudflared`.
 
 `--check` is not a perfect dry run — the environment sync, the browser download
 and the Playwright detection all skip, so a first `--check` run reports less
@@ -80,7 +130,7 @@ is viable.
 | Role | Responsibility |
 | --- | --- |
 | `base` | apt upgrade, `unattended-upgrades`, key-only SSH, timezone, zram, and the service account |
-| `storage` | Mount the SSD; put the browser profile, caches and OAuth store on it |
+| `storage` | Phase 1: SD-card state paths. Phase 2: mount the SSD, migrate onto it |
 | `uv` | Install `uv`, check out the application, `uv sync --frozen --no-dev` |
 | `browser` | An explicit apt library list, then `playwright install chromium` |
 | `app` | systemd unit, `EnvironmentFile`, the service it runs as |
@@ -93,7 +143,9 @@ since it is the thing being synced.
 
 Each role is tagged with its own name, so `--tags browser` re-runs just that
 part. Always include `app` when using tags: the `uv` and `browser` roles notify
-its restart handler.
+its restart handler. `migrate` is the exception: it's not a role but a
+one-shot task inside `storage`, tagged `never` as well, so it only ever runs
+when named explicitly — see "Two phases" above.
 
 ## How the deployment mitigations land
 

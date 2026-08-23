@@ -26,6 +26,24 @@
         quiet: true
       tags: [always]
 
+    # Catches the one placeholder most likely to survive into a real run: the
+    # tunnel role writes vault_mcp_tunnel_id/credentials straight over
+    # whatever's at /etc/cloudflared, including a real named tunnel already
+    # set up by hand, so a leftover example UUID would silently clobber it
+    # with nonsense rather than fail loudly.
+    - name: Assert the vaulted tunnel credentials aren't still the example
+      ansible.builtin.assert:
+        that:
+          - vault_mcp_tunnel_id != '00000000-0000-0000-0000-000000000000'
+        fail_msg: >-
+          vault_mcp_tunnel_id is still the placeholder UUID from
+          vault.example.yml. Set it to the real tunnel ID from `cloudflared
+          tunnel create` (and vault_mcp_tunnel_credentials to that command's
+          credentials file) before running this against a host that already
+          has a tunnel set up — otherwise this overwrites it.
+        quiet: true
+      tags: [always]
+
     - name: Assert the public hostname has been set
       ansible.builtin.assert:
         that:

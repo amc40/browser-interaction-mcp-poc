@@ -23,11 +23,38 @@ mcp_repo_url: https://github.com/amc40/browser-interaction-mcp-poc.git
 mcp_repo_version: main
 mcp_checkout_dir: /opt/browser-interaction-mcp
 
-# Everything that gets written constantly lives on the SSD. An always-on
-# Chromium writes to its profile and cache hard enough to kill an SD card.
+# Everything that gets written constantly should end up on an SSD — an
+# always-on Chromium writes to its profile and cache hard enough to kill an SD
+# card — but the two don't have to arrive together. Two phases:
+#
+#   Phase 1 (storage_mount_ssd: false, the default below): no SSD yet. State
+#   lands directly on the SD card, at mcp_sd_state_dir / mcp_sd_browsers_dir.
+#   Everything still works; the SD card just takes the write load it would
+#   otherwise be spared.
+#
+#   Phase 2: once an SSD is attached, formatted, and its UUID known, set
+#   storage_mount_ssd: true and storage_ssd_uuid below, then run
+#     ansible-playbook site.yml --tags migrate --ask-become-pass --ask-vault-pass
+#   once — it mounts the SSD and copies Phase 1's state across — followed by
+#   an ordinary run to finish switching everything over and restart the
+#   service. See roles/storage/tasks/migrate.yml.
+#
+# mcp_state_dir / mcp_browsers_dir resolve to whichever phase is current, so
+# nothing outside the storage role, and nothing in the app unit, needs to
+# know which one that is.
+storage_mount_ssd: false
+storage_ssd_uuid: ""
+
 mcp_ssd_mountpoint: /mnt/ssd
-mcp_state_dir: "{{ mcp_ssd_mountpoint }}/browser-interaction-mcp"
-mcp_browsers_dir: "{{ mcp_ssd_mountpoint }}/playwright"
+mcp_sd_state_dir: /var/lib/browser-interaction-mcp
+mcp_sd_browsers_dir: /var/lib/browser-interaction-mcp-playwright
+
+mcp_state_dir: >-
+  {{ (mcp_ssd_mountpoint ~ '/browser-interaction-mcp')
+     if (storage_mount_ssd | bool) else mcp_sd_state_dir }}
+mcp_browsers_dir: >-
+  {{ (mcp_ssd_mountpoint ~ '/playwright')
+     if (storage_mount_ssd | bool) else mcp_sd_browsers_dir }}
 
 # Read by systemd as root before privileges are dropped, so it never has to be
 # readable by anything else. Outside the git tree on purpose: settings.py reads

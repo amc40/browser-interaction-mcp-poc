@@ -1,4 +1,17 @@
 ---
+# If cloudflared was already set up by hand, it was most likely installed
+# following Cloudflare's own docs, which predate deb822 sources and write a
+# one-line-format repo file here instead. Left in place, apt would end up
+# with two overlapping definitions of the same repository — not broken, but
+# not a single source of truth either, and apt is happy to warn about it.
+# Removing it before adding the deb822 one below makes this file the only
+# thing managing that repo from here on, however it got there originally.
+- name: Remove Cloudflare's legacy one-line apt source, if present
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/cloudflared.list
+    state: absent
+  register: tunnel_legacy_repo_removed
+
 - name: Add the Cloudflare apt repository
   ansible.builtin.deb822_repository:
     name: cloudflared
@@ -15,8 +28,13 @@
 - name: Update the apt cache for the new repository
   ansible.builtin.apt:
     update_cache: true
-  when: tunnel_repo.changed  # noqa: no-handler — the next task needs it now
+  when: tunnel_repo.changed or tunnel_legacy_repo_removed.changed  # noqa: no-handler — the next task needs it now
 
+# state: present, not latest: if cloudflared is already installed — however it
+# got there — this leaves its version alone rather than force-upgrading it on
+# every run. The systemd unit below always points at /usr/bin/cloudflared, so
+# whichever binary apt considers installed is the one that actually runs;
+# nothing here depends on how it got installed originally.
 - name: Install cloudflared
   ansible.builtin.apt:
     name: cloudflared

@@ -135,9 +135,11 @@ Further notes specific to this board:
 
 - **Storage.** The Pi 4 has no PCIe connector, so the SSD goes in a USB 3.0 port
   rather than on an NVMe HAT. An always-on Chromium writes to its profile and
-  cache constantly, which is what kills SD cards. Relocate the browser profile
-  and cache to the SSD at minimum. Prefer a powered enclosure, or the official
-  3A PSU.
+  cache constantly, which is what kills SD cards, so getting off it eventually
+  matters — but it doesn't have to happen before the server can run. The
+  playbook in `deploy/` starts on the SD card by default and migrates onto an
+  SSD once one exists; see [`deploy/README.md`](../deploy/README.md#two-phases-sd-card-first-ssd-later).
+  Prefer a powered enclosure, or the official 3A PSU, whenever the SSD arrives.
 - **Cooling.** The Cortex-A72 throttles around 80 °C and the Pi 4 reaches it
   under sustained load in a closed case. Chromium rendering is exactly that load
   pattern, and throttling presents as intermittently slow page loads — easily

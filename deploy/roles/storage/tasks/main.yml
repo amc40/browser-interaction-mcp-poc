@@ -1,13 +1,25 @@
 ---
+# Phase 1: storage_mount_ssd is false by default, and nothing in this file
+# below the "Create the service account's state directories" task runs at
+# all — mcp_state_dir / mcp_browsers_dir already resolve to SD-card paths
+# (see vars.yml), so the directory-creation tasks are all that's needed.
+#
+# Phase 2: once storage_mount_ssd: true and storage_ssd_uuid are set, the
+# tasks below mount the SSD on every run, and migrate.yml runs once — only
+# when explicitly requested with --tags migrate — to copy Phase 1's state
+# across before anything creates fresh empty directories at the new location.
 - name: Assert the SSD has been identified
   ansible.builtin.assert:
     that:
       - storage_ssd_uuid | length > 0
     fail_msg: >-
-      Set storage_ssd_uuid to the filesystem UUID of the SSD (`lsblk -f` on the
-      Pi), or set storage_mount_ssd: false if the system already boots from it.
+      storage_mount_ssd is true but storage_ssd_uuid is empty. Set it to the
+      filesystem UUID of the SSD (`lsblk -f` on the Pi), or set
+      storage_mount_ssd: false if there's no SSD yet (Phase 1), or if the
+      whole system already boots from one.
     quiet: true
   when: storage_mount_ssd | bool
+  tags: [migrate]
 
 - name: Create the SSD mountpoint
   ansible.builtin.file:
@@ -17,6 +29,7 @@
     group: root
     mode: "0755"
   when: storage_mount_ssd | bool
+  tags: [migrate]
 
 - name: Mount the SSD
   ansible.posix.mount:
@@ -26,11 +39,23 @@
     opts: "{{ storage_ssd_options }}"
     state: mounted
   when: storage_mount_ssd | bool
+  tags: [migrate]
+
+# Run-once, and only when asked for: tagged `never` in addition to `migrate`,
+# so an ordinary run (no --tags, or any other --tags) always skips it, no
+# matter how many times it's re-applied. See the file for what it does when
+# there's nothing to migrate, and what it deliberately leaves behind.
+- name: Migrate Phase 1's SD-card state onto the SSD
+  ansible.builtin.include_tasks: migrate.yml
+  when: storage_mount_ssd | bool
+  tags: [migrate, never]
 
 # Everything the server writes constantly lives here: the browser profile and
-# cache, which is what kills SD cards, and the OAuth store, which holds upstream
-# GitHub tokens at rest and therefore wants deliberate permissions rather than
-# whatever it inherits (docs/deployment.md §3).
+# cache, which is what kills SD cards if left there permanently, and the
+# OAuth store, which holds upstream GitHub tokens at rest and therefore wants
+# deliberate permissions rather than whatever it inherits (docs/deployment.md
+# §3). Idempotent regardless of phase: a no-op once migrate.yml has already
+# populated these, ordinary directory creation otherwise.
 - name: Create the service account's state directories
   ansible.builtin.file:
     path: "{{ item }}"
