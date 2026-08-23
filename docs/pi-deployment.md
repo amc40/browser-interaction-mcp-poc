@@ -155,9 +155,14 @@ which also records the two ordering-driven departures from the role table below
 and the mitigations no playbook can apply until the code exposes them.
 
 Agentless, so the control node is a laptop and the Pi needs only SSH and a
-system `python3`. Raspberry Pi OS Bookworm ships 3.11, which satisfies Ansible's
-target-side requirement; that is unrelated to the 3.13 the application needs,
-which `uv` fetches as its own standalone arm64 build.
+system `python3`. Current Raspberry Pi OS images are rebased on Debian 13
+(trixie, since October 2025) and ship Python 3.13, which comfortably satisfies
+Ansible's target-side requirement; that is coincidentally the same version the
+application needs, but unrelated in practice, since `uv` fetches its own
+standalone arm64 build rather than using the system interpreter. An older
+bookworm image (Python 3.11) still satisfies Ansible's requirement too, but see
+[`deploy/roles/browser/vars/main.yml`](../deploy/roles/browser/vars/main.yml)
+for the apt package names that change between the two.
 
 The justification for automating a single host is recovery: when the SD card
 fails, provisioned means one command rather than an evening rediscovering which

@@ -21,9 +21,12 @@ pipx install ansible-core          # or your package manager's ansible
 ansible-galaxy collection install -r requirements.yml -p collections
 ```
 
-On the Pi: a 64-bit Raspberry Pi OS Bookworm install, SSH reachable with a key
-already installed, a sudo-capable account, and the system `python3` that ships
-with it. The application's own Python 3.13 is fetched by `uv` and is unrelated.
+On the Pi: a 64-bit Raspberry Pi OS install (trixie, current as of October
+2025 — bookworm still works, but the apt package list in `roles/browser`
+assumes trixie's names), SSH reachable with a key already installed, a
+sudo-capable account, and the system `python3` that ships with it. The
+application's own Python 3.13 is fetched by `uv` and is unrelated, even though
+trixie happens to ship the same version system-wide.
 
 Elsewhere, once:
 
