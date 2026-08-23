@@ -43,6 +43,13 @@
 
 # Root-owned on purpose: the service account reads its own code and cannot
 # rewrite it.
+#
+# Unlike command/shell, the git module claims check-mode support — but
+# predicting a change still means running real git against the checkout, so on
+# a fresh host where "Install the base packages" only simulated installing
+# git, there's no git binary yet to run. Same "first --check run reports less
+# than a first real run" caveat the README already calls out for the
+# environment sync and the browser download.
 - name: Check out the application
   ansible.builtin.git:
     repo: "{{ mcp_repo_url }}"
@@ -50,6 +57,7 @@
     version: "{{ mcp_repo_version }}"
     depth: 1
     single_branch: true
+  when: not ansible_check_mode
   notify: Restart browser-interaction-mcp
 
 - name: Ensure the checkout is root-owned
@@ -63,6 +71,12 @@
 # --frozen respects uv.lock and fails rather than silently resolving something
 # else; --no-dev omits ruff, mypy and the audit tooling, which have no purpose
 # here.
+#
+# A custom changed_when makes Ansible run this for real even under --check —
+# it can't evaluate that expression against output it never produced — so on
+# a fresh host, where the checkout above was itself skipped under --check,
+# chdir has nothing to change into. This is the "environment sync" the README
+# already names as one of the things a first --check run can't show.
 - name: Sync the environment from the lockfile
   ansible.builtin.command: "{{ uv_install_dir }}/uv sync --frozen --no-dev"
   args:
@@ -77,4 +91,5 @@
   changed_when: >-
     (uv_sync.stdout ~ uv_sync.stderr)
     is search('Installed|Uninstalled|Creating virtual environment')
+  when: not ansible_check_mode
   notify: Restart browser-interaction-mcp

@@ -10,6 +10,15 @@ tunnel_config_dir: /etc/cloudflared
 tunnel_apt_key_url: https://pkg.cloudflare.com/cloudflare-main.gpg
 tunnel_apt_uri: https://pkg.cloudflare.com/cloudflared
 
+# Pinned rather than ansible_facts['distribution_release']: Cloudflare's repo
+# publishes a signed suite per Debian codename, and lags new releases —
+# https://pkg.cloudflare.com/cloudflared/dists/trixie/InRelease is a 404 as of
+# 2026-08, while dists/bookworm/InRelease is fine. cloudflared itself is a
+# static Go binary with no libc-version-specific dependencies, so a bookworm
+# package installs and runs the same on a trixie host. Bump this once
+# Cloudflare ships a trixie suite.
+tunnel_apt_suite: bookworm
+
 # Loopback-only Prometheus endpoint. Useful for answering "is the tunnel up"
 # without reading the journal, and reachable from nowhere else.
 tunnel_metrics_address: 127.0.0.1:2000
