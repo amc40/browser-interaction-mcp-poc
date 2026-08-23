@@ -1,0 +1,27 @@
+{
+  "features": {
+    "ghcr.io/amc40/ubuntu-dotfiles/ubuntu-dotfiles:1.7.0": {
+      "version": "1.7.0",
+      "resolved": "ghcr.io/amc40/ubuntu-dotfiles/ubuntu-dotfiles@sha256:e3e6ede8b07ad43ebe4f33ec2f9cf605ac5b0ad2458dbfebd7797cb5e755fbff",
+      "integrity": "sha256:e3e6ede8b07ad43ebe4f33ec2f9cf605ac5b0ad2458dbfebd7797cb5e755fbff"
+    },
+    "ghcr.io/devcontainers-extra/features/uv:1": {
+      "version": "1.0.2",
+      "resolved": "ghcr.io/devcontainers-extra/features/uv@sha256:1ac5b9f17a9e9e745933d0ac2ecf758e06ed3da4423cd22c94cce4d482fd2dd8",
+      "integrity": "sha256:1ac5b9f17a9e9e745933d0ac2ecf758e06ed3da4423cd22c94cce4d482fd2dd8"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "1.8.0",
+      "resolved": "ghcr.io/devcontainers/features/python@sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511",
+      "integrity": "sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511"
+    },
+    "ghcr.io/sliekens/devcontainer-features/ansible-core:1": {
+      "version": "1.0.0",
+      "resolved": "ghcr.io/sliekens/devcontainer-features/ansible-core@sha256:4488cc6e0552ac72b030f8f5628eec7b3c35add910f4a2fc07c03365da5de392",
+      "integrity": "sha256:4488cc6e0552ac72b030f8f5628eec7b3c35add910f4a2fc07c03365da5de392",
+      "dependsOn": [
+        "ghcr.io/devcontainers/features/python:1"
+      ]
+    }
+  }
+}
