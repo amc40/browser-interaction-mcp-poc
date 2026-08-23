@@ -1,11 +1,20 @@
 ---
+# deploy-owned, not root-owned: `uv sync` writes here, and a webhook-triggered
+# redeploy (deploy_webhook role) runs it as the deploy account rather than as
+# root, so it needs write access to its own cache without any elevation.
+# recurse: true so this also fixes up whatever a *previous*, root-driven uv
+# sync already wrote in here (uv's own internal git cache, wheel cache, …) -
+# without it only the top-level directory changes, and uv still hits
+# permission-denied the first time it tries to touch a still-root-owned file
+# underneath.
 - name: Create the uv cache and Python directories
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    owner: root
-    group: root
-    mode: "0755"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "u=rwX,go=rX"
+    recurse: true
   loop:
     - "{{ uv_cache_dir }}"
     - "{{ uv_python_install_dir }}"
@@ -41,9 +50,33 @@
         path: /root/uv-install-{{ uv_version }}.sh
         state: absent
 
-# Root-owned on purpose: the service account reads its own code and cannot
-# rewrite it.
+# The checkout and everything `uv sync` writes into it (.venv included) need
+# to end up owned by deploy, not root — a webhook-triggered redeploy
+# (deploy_webhook role) runs both git and uv as that account, with no
+# elevation. Running the two tasks below `become_user: deploy` gets there
+# directly, rather than running them as root and chowning afterwards: the
+# fixup approach was tried first, but git itself refuses to operate on a
+# repository it doesn't own (its "dubious ownership" protection, which
+# applies to root exactly as it would anyone else) — so root-then-chown works
+# exactly once, and breaks root's own git invocation on every run after that.
 #
+# On a truly fresh host `deploy` cannot create {{ mcp_checkout_dir }} itself
+# — /opt is root-owned — so this creates an empty, deploy-owned directory
+# first for git to clone into. recurse: true so this also re-owns a host
+# upgrading from before this account existed, where the checkout (and .venv)
+# were cloned/synced root-owned: without it, only the top-level directory
+# would change, and the become_user: deploy git command below would hit the
+# same "dubious ownership" refusal the comment above describes, on
+# directory contents rather than the directory itself.
+- name: Create the checkout directory
+  ansible.builtin.file:
+    path: "{{ mcp_checkout_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    mode: "u=rwX,go=rX"
+    recurse: true
+
 # Unlike command/shell, the git module claims check-mode support — but
 # predicting a change still means running real git against the checkout, so on
 # a fresh host where "Install the base packages" only simulated installing
@@ -51,6 +84,7 @@
 # than a first real run" caveat the README already calls out for the
 # environment sync and the browser download.
 - name: Check out the application
+  become_user: "{{ deploy_user }}"
   ansible.builtin.git:
     repo: "{{ mcp_repo_url }}"
     dest: "{{ mcp_checkout_dir }}"
@@ -59,14 +93,6 @@
     single_branch: true
   when: not ansible_check_mode
   notify: Restart browser-interaction-mcp
-
-- name: Ensure the checkout is root-owned
-  ansible.builtin.file:
-    path: "{{ mcp_checkout_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
 
 # --frozen respects uv.lock and fails rather than silently resolving something
 # else; --no-dev omits ruff, mypy and the audit tooling, which have no purpose
@@ -78,6 +104,7 @@
 # chdir has nothing to change into. This is the "environment sync" the README
 # already names as one of the things a first --check run can't show.
 - name: Sync the environment from the lockfile
+  become_user: "{{ deploy_user }}"
   ansible.builtin.command: "{{ uv_install_dir }}/uv sync --frozen --no-dev"
   args:
     chdir: "{{ mcp_checkout_dir }}"

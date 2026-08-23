@@ -1,0 +1,10 @@
+---
+# The oneshot deploy unit is never "restarted" here — it's only ever started
+# on demand, by deploy-webhook.service itself (or by hand for testing), never
+# left running for a handler to restart.
+- name: Restart deploy-webhook
+  ansible.builtin.systemd_service:
+    name: "{{ deploy_webhook_systemd_unit }}"
+    state: restarted
+    daemon_reload: true
+  when: not ansible_check_mode

@@ -1,9 +1,8 @@
 # Deploying to a Raspberry Pi as a claude.ai connector
 
-**Status: planned, partly built.** The provisioning playbook this document
-specifies now exists in [`deploy/`](../deploy/README.md), drafted but never run
-against real hardware. Nothing else here is built: the server still has no
-browser actions to deploy.
+**Status: running.** The provisioning playbook this document specifies is in
+[`deploy/`](../deploy/README.md) and provisions the real host serving
+`browser-interaction-mcp` to claude.ai today.
 
 [`deployment.md`](deployment.md) lists *what must change* before this runs on a
 server, independently of where that server is. This document picks the where,
@@ -180,6 +179,7 @@ libraries Chromium needed.
 | `browser` | Explicit apt library list, then `playwright install chromium` |
 | `app` | systemd unit, `EnvironmentFile`, dedicated unprivileged service account with no interactive login |
 | `tunnel` | `cloudflared` (arm64), named-tunnel credentials, its own unit |
+| `deploy_webhook` | The fast code-deploy path — see below |
 
 ### Implementation notes
 
@@ -228,6 +228,29 @@ Two gates worth noting:
 - CI runs on x86 runners, so **arm64 is never exercised by CI**. Browser-launch
   breakage will only ever appear on the Pi. A smoke-test target runnable there
   is worth having once real actions exist.
+
+## Fast path: webhook-triggered code deploys
+
+Re-running the whole playbook is the right tool for infra changes — new apt
+packages, systemd unit changes, tunnel config — but heavy for "one Python
+file changed, ship it," and it needs someone's laptop, the vault password and
+the become password every time. `deploy_webhook.py`
+(`src/browser_interaction_mcp/`) is a small, dependency-free receiver the
+`deploy_webhook` role installs as its own long-lived systemd service: GitHub
+Actions HMAC-signs a request naming the commit that just passed CI on `main`
+and POSTs it to `https://<host>/deploy-webhook` — a second, path-scoped
+ingress rule on the *same* tunnel and hostname, so no new DNS record or
+inbound port is involved either. On a valid signature for `refs/heads/main`
+it starts a second, oneshot unit that does the actual
+`git reset --hard origin/main` → `uv sync --frozen --no-dev` →
+`playwright install chromium` → restart sequence (`deploy/deploy.sh`), running
+as a dedicated `deploy` account that owns the checkout outright rather than
+via any elevation.
+
+Deliberately narrow: this path only ever does what a code-only change needs.
+It cannot install a new apt package, change a systemd unit, or touch the
+tunnel config — those still need this playbook, run by hand, exactly as
+today. The two mechanisms are not merged, and are not meant to be.
 
 ## Known constraints
 

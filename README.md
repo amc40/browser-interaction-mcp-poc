@@ -26,7 +26,12 @@ It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
 Tunnel. The target, the options rejected on the way to it, and what that
 topology asks of the configuration are in
 [`docs/pi-deployment.md`](docs/pi-deployment.md); the Ansible playbook that
-provisions it is in [`deploy/`](deploy/README.md).
+provisions it is in [`deploy/`](deploy/README.md). A code-only change ships
+without re-running that playbook: GitHub Actions signs a request to a small
+webhook receiver on the Pi (`deploy_webhook.py`) once CI is green on `main`,
+which pulls, syncs and restarts itself — see
+[`docs/pi-deployment.md`](docs/pi-deployment.md#fast-path-webhook-triggered-code-deploys)
+for the scope boundary against the playbook.
 
 Browser actions go stale as pages change.
 [`docs/self-healing.md`](docs/self-healing.md) proposes a sandboxed agent that
@@ -117,6 +122,7 @@ fact that shell access on the host bypasses all of this.
 | `src/browser_interaction_mcp/tools.py` | Every exposed tool. New browser actions go here |
 | `src/browser_interaction_mcp/browser.py` | Shared browser/page setup for every action, headless or headed |
 | `src/browser_interaction_mcp/sainsburys.py` | Browser actions against Sainsbury's public groceries site |
+| `src/browser_interaction_mcp/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy on the Pi — not part of the running server |
 | `src/browser_interaction_mcp/auth.py` | Who may use the server: the OAuth provider and the login check |
 | `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
 | `src/browser_interaction_mcp/redaction.py` | Keeping the server's own credentials out of logs and errors |

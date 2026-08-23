@@ -11,6 +11,14 @@
 mcp_service_user: browsermcp
 mcp_service_group: browsermcp
 
+# The account that owns the checkout and everything uv/Playwright write while
+# updating it — uv's cache and Python install dirs (roles/uv), the browsers
+# dir (roles/browser) — so a webhook-triggered redeploy (roles/deploy_webhook)
+# needs no elevation for any of that. Distinct from mcp_service_user above,
+# which only ever reads this code and must never be able to write it.
+deploy_user: deploy
+deploy_group: deploy
+
 # The systemd unit's name, shared because the tunnel unit orders itself after
 # it. Distinct from the console script `uv` installs into the venv, which is
 # named by the application's pyproject.toml.
@@ -71,6 +79,11 @@ mcp_log_level: INFO
 mcp_rate_limit_per_second: 1.0
 mcp_rate_limit_burst: 5
 
+# The deploy webhook receiver (roles/deploy_webhook). Also loopback only —
+# reachable only via the tunnel's path-scoped ingress rule for it, the same
+# way mcp_port is only reachable via the tunnel's hostname rule.
+deploy_webhook_port: 8787
+
 # The one GitHub account allowed to call tools, as its numeric user ID.
 mcp_github_user_id: "36701168"
 # Revocation delay: a token revoked on GitHub keeps working until its cache
@@ -93,3 +106,4 @@ mcp_github_client_id: "{{ vault_mcp_github_client_id }}"
 mcp_github_client_secret: "{{ vault_mcp_github_client_secret }}"
 mcp_tunnel_id: "{{ vault_mcp_tunnel_id }}"
 mcp_tunnel_credentials: "{{ vault_mcp_tunnel_credentials }}"
+mcp_deploy_webhook_secret: "{{ vault_mcp_deploy_webhook_secret }}"

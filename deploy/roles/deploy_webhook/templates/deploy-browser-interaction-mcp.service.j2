@@ -1,0 +1,55 @@
+# Managed by Ansible (deploy_webhook role) — local edits will be overwritten.
+#
+# Never enabled and never started at boot — only triggered on demand by
+# deploy-webhook.service (`sudo systemctl restart --no-block {{ deploy_oneshot_systemd_unit }}.service`),
+# or by hand for testing.
+[Unit]
+Description=deploy-browser-interaction-mcp — pulls origin/main and restarts the app
+Documentation=https://github.com/amc40/browser-interaction-mcp-poc
+# Same reasoning as roles/app/templates/app.service.j2's RequiresMountsFor:
+# refuse to write a half-downloaded browser to the SD card if the SSD isn't
+# actually mounted.
+RequiresMountsFor={{ mcp_browsers_dir }}
+
+[Service]
+Type=oneshot
+User={{ deploy_user }}
+Group={{ deploy_group }}
+WorkingDirectory={{ mcp_checkout_dir }}
+Environment=UV={{ uv_install_dir }}/uv
+Environment=UV_CACHE_DIR={{ uv_cache_dir }}
+Environment=UV_PYTHON_INSTALL_DIR={{ uv_python_install_dir }}
+Environment=UV_PYTHON_DOWNLOADS=automatic
+Environment=PLAYWRIGHT_BROWSERS_PATH={{ mcp_browsers_dir }}
+Environment=MCP_SYSTEMD_UNIT={{ mcp_systemd_unit }}
+ExecStart={{ deploy_script }}
+# uv sync and a Playwright browser download can both be slow on a Pi 4.
+TimeoutStartSec=300
+
+# --- Sandboxing ------------------------------------------------------------
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ mcp_checkout_dir }} {{ uv_cache_dir }} {{ uv_python_install_dir }} {{ mcp_browsers_dir }}
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+UMask=0022
+
+# Deliberately absent:
+#   NoNewPrivileges, SystemCallFilter — same reasoning as
+#     deploy-webhook.service.j2: this script's last step is also a sudo call
+#     (templates/sudoers.j2), to restart the real app.
+#   MemoryDenyWriteExecute — same reasoning as app.service.j2: `playwright
+#     install` runs through Playwright's own bundled Node.js/V8 driver, not
+#     just the browser it downloads, and V8 needs writable+executable pages
+#     for JIT to start at all. Confirmed by hitting exactly this on the real
+#     Pi (V8 Fatal Error in SetPermissions) before this line was removed.

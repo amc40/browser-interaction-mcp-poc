@@ -5,8 +5,10 @@ An Ansible playbook implementing the plan in
 `browser-interaction-mcp` to claude.ai through a named Cloudflare Tunnel, with
 the server itself bound to loopback.
 
-**Status: drafted, never run against real hardware.** It is written to be read
-before it is trusted, and the first run should be `--check --diff`.
+**Status: running in production**, provisioning the real host behind
+`browser-interaction-mcp`'s Cloudflare Tunnel. Still written to be read before
+it is trusted on a *new* host, and the first run against one should be
+`--check --diff`.
 
 The justification for automating a single host is recovery: when the SD card
 fails, provisioned means one command rather than an evening rediscovering which
@@ -148,6 +150,7 @@ is viable.
 | `browser` | An explicit apt library list, then `playwright install chromium` |
 | `app` | systemd unit, `EnvironmentFile`, the service it runs as |
 | `tunnel` | `cloudflared` from Cloudflare's apt repository, named-tunnel credentials, its own unit |
+| `deploy_webhook` | The `deploy` account that owns the checkout, its sudoers rules, and the two units behind the fast deploy path below |
 
 Two departures from the table in `docs/pi-deployment.md`, both because of
 ordering: the service account is created in `base` rather than `app`, since
@@ -160,6 +163,32 @@ its restart handler. `migrate` is the exception: it's not a role but a
 one-shot task inside `storage`, tagged `never` as well, so it only ever runs
 when named explicitly — see "Two phases" above.
 
+## Fast path: webhook-triggered code deploys
+
+Re-running this whole playbook is the right tool for infra changes, but heavy
+for "one Python file changed, ship it." `deploy_webhook.py`
+(`src/browser_interaction_mcp/`), installed and run by the `deploy_webhook`
+role, is a small always-on receiver that lets GitHub Actions trigger a
+code-only redeploy — `git reset --hard origin/main`, `uv sync`, a Playwright
+browser check, then a restart — without opening any inbound port or needing
+this playbook run from anywhere. See its module docstring, `deploy/deploy.sh`
+(what it triggers) and `.github/workflows/ci.yml`'s `deploy` job for the
+mechanics; `docs/pi-deployment.md` has the scope boundary against this
+playbook.
+
+It still needs three things this playbook does not automate:
+
+1. **Generate the shared secret** it and CI both sign/verify with:
+   `openssl rand -hex 32`.
+2. **Put it in `vault.yml`** as `vault_mcp_deploy_webhook_secret` (see
+   `vault.example.yml`), then run this playbook once (`--tags deploy_webhook`
+   is enough if nothing else needs applying).
+3. **Set two GitHub Actions repository secrets** on this repo: the same value
+   as `DEPLOY_WEBHOOK_SECRET`, and `DEPLOY_WEBHOOK_URL` set to
+   `https://<your-host>/deploy-webhook`. The playbook's final "what's left to
+   do by hand" output prints both reminders with your actual hostname filled
+   in.
+
 ## How the deployment mitigations land
 
 Numbered against [`docs/deployment.md`](../docs/deployment.md).
@@ -170,7 +199,7 @@ Numbered against [`docs/deployment.md`](../docs/deployment.md).
 | 3 | Own the OAuth state | `XDG_DATA_HOME` puts the store on the SSD at mode `0700`, owned by the service account |
 | 4 | Rate limit at the edge | One process keeps the in-memory bucket honest; the unauthenticated half is Cloudflare's job and is **not** configured here |
 | 5 | Handle the secrets as secrets | `ansible-vault` on the control node, `EnvironmentFile` at `0600` outside the git tree, `BROWSER_MCP_INCLUDE_ERROR_DETAILS=false` |
-| 6 | Nobody gets a shell | Dedicated system account, `nologin`, locked password, root-owned checkout it cannot rewrite, nothing else on the host, key-only SSH (`base_harden_ssh: true` — opt in once the key installed is somewhere durable, not just agent-forwarded from a session that might not outlive it) |
+| 6 | Nobody gets a shell | Dedicated system account, `nologin`, locked password, checkout owned by a separate `deploy` account the *service* account still cannot write to, nothing else on the host, key-only SSH (`base_harden_ssh: true` — opt in once the key installed is somewhere durable, not just agent-forwarded from a session that might not outlive it). `deploy` existing at all is a deliberate, narrower trade for the fast deploy path above — see its own privilege-model note |
 | 7 | Protect the browser profile at rest | Confined to the service account's `0700` state directory — see the gap below |
 
 ## Gaps this playbook cannot close
@@ -192,10 +221,6 @@ naming them here is cheaper than rediscovering them later:
   Permissions are not encryption; anyone holding the disk holds the sessions.
 - **§8, audit logging.** Nothing records which tool ran, when, or on whose
   authority.
-- **Playwright is not a dependency yet.** `tools.py` exposes only `server_info`,
-  so the `browser` role installs the apt libraries and then skips the browser
-  download with a message. It becomes live the moment Playwright is added to
-  `pyproject.toml`.
 - **The `uv` installer is fetched over HTTPS without a checksum.** Pinning a
   known digest per `uv_version` would close it.
 

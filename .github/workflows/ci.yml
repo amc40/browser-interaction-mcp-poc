@@ -105,3 +105,30 @@ jobs:
         run: |
           uv build
           uvx twine check --strict dist/*
+
+  # Fast path for a code-only change: notify the Pi's webhook receiver
+  # (deploy_webhook.py, via the Cloudflare Tunnel it's already reachable
+  # through - see docs/pi-deployment.md) once every other job on this push has
+  # passed. `needs:` on all of them, not a separate `workflow_run` trigger, is
+  # what makes "only after CI is green" a property of this one workflow run
+  # rather than something a second workflow has to re-derive.
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    needs: [quality, lockfile, test, workflows, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 2
+    steps:
+      - name: Notify the Pi to deploy
+        env:
+          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          DEPLOY_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          body=$(jq -nc --arg sha "$DEPLOY_SHA" '{sha: $sha, ref: "refs/heads/main"}')
+          signature="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$DEPLOY_WEBHOOK_SECRET" -r | cut -d' ' -f1)"
+          curl --fail-with-body --max-time 10 --silent --show-error \
+            --request POST "$DEPLOY_URL" \
+            --header "X-Deploy-Signature: $signature" \
+            --header "Content-Type: application/json" \
+            --data "$body"

@@ -47,12 +47,17 @@
     - not ansible_check_mode
   notify: Restart browser-interaction-mcp
 
-- name: Make the downloaded browsers world-readable
+# deploy-owned, not root-owned: a webhook-triggered redeploy (deploy_webhook
+# role) re-runs `playwright install` as the deploy account, same reasoning as
+# roles/uv/tasks/main.yml's own ownership fixup after uv sync. Read access
+# for everyone else is what the service account (mcp_service_user) actually
+# needs — launching Chromium, never updating it.
+- name: Ensure the downloaded browsers are owned by the deploy account
   ansible.builtin.file:
     path: "{{ mcp_browsers_dir }}"
     state: directory
-    owner: root
-    group: root
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
     mode: u=rwX,go=rX
     recurse: true
   when:
