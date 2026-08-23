@@ -15,11 +15,18 @@ base_unattended_upgrades_reboot: false
 base_unattended_upgrades_reboot_time: "04:00"
 
 # Key-only SSH. Refuses to apply if no authorized_keys file exists on the host,
-# so this cannot lock the operator out of a Pi that only has password login.
-base_harden_ssh: true
+# so this cannot lock the operator out of a Pi that only has password login —
+# but that guard only checks that *a* key is installed, not that the key is
+# somewhere durable. An agent-forwarded key from an ephemeral environment
+# (a devcontainer, a CI runner) passes it just as well as one on a laptop that
+# will still be around tomorrow, and only the latter is safe to lock the door
+# behind. Opt in once the key in place is one you're sure will outlive this
+# session.
+base_harden_ssh: false
 
 # zram rather than a swap file: swapping to the SD card is slow and destructive.
 # Worth having even on 8GB, since Chromium wants roughly 1GB per context.
+# Raspberry Pi OS (bookworm and later) already provides this out of the box
+# via rpi-swap — see roles/base/tasks/zram.yml — so this only gates a check
+# that it's actually active, not a competing zram setup of our own.
 base_zram_enabled: true
-base_zram_percent: 50
-base_zram_algorithm: zstd

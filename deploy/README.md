@@ -170,7 +170,7 @@ Numbered against [`docs/deployment.md`](../docs/deployment.md).
 | 3 | Own the OAuth state | `XDG_DATA_HOME` puts the store on the SSD at mode `0700`, owned by the service account |
 | 4 | Rate limit at the edge | One process keeps the in-memory bucket honest; the unauthenticated half is Cloudflare's job and is **not** configured here |
 | 5 | Handle the secrets as secrets | `ansible-vault` on the control node, `EnvironmentFile` at `0600` outside the git tree, `BROWSER_MCP_INCLUDE_ERROR_DETAILS=false` |
-| 6 | Nobody gets a shell | Dedicated system account, `nologin`, locked password, root-owned checkout it cannot rewrite, key-only SSH, nothing else on the host |
+| 6 | Nobody gets a shell | Dedicated system account, `nologin`, locked password, root-owned checkout it cannot rewrite, nothing else on the host, key-only SSH (`base_harden_ssh: true` — opt in once the key installed is somewhere durable, not just agent-forwarded from a session that might not outlive it) |
 | 7 | Protect the browser profile at rest | Confined to the service account's `0700` state directory — see the gap below |
 
 ## Gaps this playbook cannot close
