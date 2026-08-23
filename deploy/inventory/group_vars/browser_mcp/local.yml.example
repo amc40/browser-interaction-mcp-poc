@@ -1,0 +1,14 @@
+---
+# Copy to local.yml (gitignored, unlike this file) and fill in with the one
+# value in this deployment that's tied to a real person rather than the
+# server: the public hostname of your named Cloudflare tunnel. It isn't a
+# secret exactly — it doesn't grant access to anything on its own — but it's
+# personal enough that it doesn't belong in a public git history either.
+#
+#   cp local.yml.example local.yml
+#   $EDITOR local.yml
+#
+# Ansible merges every file under group_vars/browser_mcp/ automatically, the
+# same way it already merges vars.yml and vault.yml, so nothing else needs to
+# change.
+mcp_public_hostname: mcp.example.com

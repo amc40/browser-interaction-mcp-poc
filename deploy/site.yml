@@ -30,11 +30,12 @@
       ansible.builtin.assert:
         that:
           - mcp_public_hostname is defined
-          - mcp_public_hostname != 'mcp.example.com'
         fail_msg: >-
-          Set mcp_public_hostname to the tunnel's own hostname on a domain you
-          own. claude.ai stores the connector URL, so an ephemeral
-          trycloudflare.com name would break on every restart.
+          mcp_public_hostname is not set. Copy
+          inventory/group_vars/browser_mcp/local.yml.example to local.yml (it's
+          gitignored, same as vault.yml) and set it to your named tunnel's
+          hostname on a domain you own. claude.ai stores the connector URL, so
+          an ephemeral trycloudflare.com name would break on every restart.
         quiet: true
       tags: [always]
 

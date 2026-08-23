@@ -52,10 +52,10 @@ mcp_github_user_id: "36701168"
 mcp_github_token_cache_seconds: 60
 
 # --- Public endpoint ------------------------------------------------------
-# The named tunnel's hostname, on a domain you own. Not a trycloudflare.com
-# quick tunnel: claude.ai stores the connector URL, and quick-tunnel hostnames
-# change on every restart.
-mcp_public_hostname: mcp.example.com
+# mcp_public_hostname itself is NOT set here: it's a real domain name tied to
+# one person, and this file is tracked in git. It's set instead in local.yml
+# in this same directory, gitignored like vault.yml — see local.yml.example.
+#
 # TLS terminates at Cloudflare's edge, so FastMCP has to be told the public
 # https URL explicitly — it decides whether to mark OAuth cookies `Secure` by
 # testing this string, not by reading forwarded headers.

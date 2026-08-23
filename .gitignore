@@ -20,4 +20,5 @@ htmlcov/
 # Ansible
 deploy/collections/
 deploy/inventory/group_vars/*/vault.yml
+deploy/inventory/group_vars/*/local.yml
 deploy/*.vault-pass

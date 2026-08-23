@@ -42,7 +42,12 @@ Elsewhere, once:
 ```sh
 cd deploy
 $EDITOR inventory/hosts.yml                            # the Pi's address
-$EDITOR inventory/group_vars/browser_mcp/vars.yml      # hostname, SSD UUID, user ID
+$EDITOR inventory/group_vars/browser_mcp/vars.yml      # SSD UUID, user ID
+
+cp inventory/group_vars/browser_mcp/local.yml.example \
+   inventory/group_vars/browser_mcp/local.yml
+$EDITOR inventory/group_vars/browser_mcp/local.yml     # your tunnel's hostname
+
 cp inventory/group_vars/browser_mcp/vault.example.yml \
    inventory/group_vars/browser_mcp/vault.yml
 $EDITOR inventory/group_vars/browser_mcp/vault.yml     # then encrypt it:
@@ -134,6 +139,10 @@ naming them here is cheaper than rediscovering them later:
 - **`vault.yml` is never decrypted into the tree.** Use `ansible-vault edit`,
   which decrypts to a temporary file. The repository's gitleaks gate is a
   backstop, not the plan.
+- **`local.yml` holds the one non-secret that's still personal**: the tunnel's
+  public hostname. It doesn't need vault-grade encryption — it isn't a
+  credential — but it's a real domain tied to one person, so it's gitignored
+  the same way `vault.yml` is rather than living in tracked `vars.yml`.
 - **Nothing here templates a `.env`.** `settings.py` reads `.env` relative to
   the working directory and rejects unknown `BROWSER_MCP_*` keys, which under
   systemd restart is a boot loop. The unit's `WorkingDirectory` is the state
