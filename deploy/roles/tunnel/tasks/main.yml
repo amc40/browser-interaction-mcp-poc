@@ -12,23 +12,32 @@
     state: absent
   register: tunnel_legacy_repo_removed
 
+# install_python_debian would auto-install the python3-debian library this
+# module needs and a bare Raspberry Pi OS image doesn't ship, but the module
+# refuses to do even that under --check — installing a package is itself a
+# change check mode won't make. So a first --check run on a fresh host can't
+# get past this at all; same "first --check run reports less than a first
+# real run" caveat the README already names for the environment sync and the
+# browser download.
 - name: Add the Cloudflare apt repository
   ansible.builtin.deb822_repository:
     name: cloudflared
     types: [deb]
     uris: "{{ tunnel_apt_uri }}"
-    suites: "{{ ansible_facts['distribution_release'] }}"
+    suites: "{{ tunnel_apt_suite }}"
     components: [main]
     architectures: [arm64]
     signed_by: "{{ tunnel_apt_key_url }}"
     state: present
     enabled: true
+    install_python_debian: true
   register: tunnel_repo
+  when: not ansible_check_mode
 
 - name: Update the apt cache for the new repository
   ansible.builtin.apt:
     update_cache: true
-  when: tunnel_repo.changed or tunnel_legacy_repo_removed.changed  # noqa: no-handler — the next task needs it now
+  when: (tunnel_repo.changed or tunnel_legacy_repo_removed.changed) and not ansible_check_mode  # noqa: no-handler — the next task needs it now
 
 # state: present, not latest: if cloudflared is already installed — however it
 # got there — this leaves its version alone rather than force-upgrading it on
@@ -96,9 +105,14 @@
     mode: "0644"
   notify: Restart cloudflared
 
+# On a fresh host under --check, "Install the cloudflared systemd unit" above
+# only simulates writing the unit file, so it isn't really on disk yet for
+# systemd to find. Same caveat as roles/app/tasks/main.yml's "Enable and start
+# the server".
 - name: Enable and start the tunnel
   ansible.builtin.systemd_service:
     name: "{{ tunnel_service_name }}"
     enabled: true
     state: started
     daemon_reload: true
+  when: not ansible_check_mode

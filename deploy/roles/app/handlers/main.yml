@@ -1,8 +1,13 @@
 ---
 # Notified by the `uv` and `browser` roles as well, so a new checkout, a new
 # lockfile sync or a new browser build all reach the running process.
+#
+# Same --check caveat as the task that enables this unit in
+# roles/app/tasks/main.yml: on a fresh host the unit file was only simulated,
+# not really written, so there's nothing yet for systemd to restart.
 - name: Restart browser-interaction-mcp
   ansible.builtin.systemd_service:
     name: "{{ mcp_systemd_unit }}"
     state: restarted
     daemon_reload: true
+  when: not ansible_check_mode

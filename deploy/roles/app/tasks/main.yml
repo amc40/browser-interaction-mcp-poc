@@ -42,9 +42,14 @@
     mode: "0644"
   notify: Restart browser-interaction-mcp
 
+# On a fresh host under --check, "Install the systemd unit" above only
+# simulates writing the unit file, so it isn't really on disk yet for systemd
+# to find. Same caveat wherever a role templates a unit and manages it in the
+# same run — see roles/tunnel/tasks/main.yml for the other instance of it.
 - name: Enable and start the server
   ansible.builtin.systemd_service:
     name: "{{ mcp_systemd_unit }}"
     enabled: true
     state: started
     daemon_reload: true
+  when: not ansible_check_mode

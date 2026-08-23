@@ -1,6 +1,10 @@
 ---
+# Same --check caveat as the task that enables this unit in
+# roles/tunnel/tasks/main.yml: on a fresh host the unit file was only
+# simulated, not really written, so there's nothing yet for systemd to restart.
 - name: Restart cloudflared
   ansible.builtin.systemd_service:
     name: "{{ tunnel_service_name }}"
     state: restarted
     daemon_reload: true
+  when: not ansible_check_mode

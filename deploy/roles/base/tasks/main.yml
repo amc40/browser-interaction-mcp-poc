@@ -49,6 +49,6 @@
   ansible.builtin.include_tasks: ssh.yml
   when: base_harden_ssh | bool
 
-- name: Configure zram
+- name: Verify zram
   ansible.builtin.include_tasks: zram.yml
   when: base_zram_enabled | bool

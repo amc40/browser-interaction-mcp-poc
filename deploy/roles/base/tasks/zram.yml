@@ -1,30 +1,36 @@
 ---
-- name: Install zram-tools
-  ansible.builtin.apt:
-    name: zram-tools
-    state: present
+# Raspberry Pi OS (bookworm and later) ships its own early-boot zram swap via
+# rpi-swap and systemd-zram-generator, active from first boot with zstd
+# compression and no configuration needed here — see /etc/rpi/swap.conf on
+# the host. An earlier revision of this role installed zram-tools instead,
+# which fights the platform's own generator for /dev/zram0 and loses:
+# "zramswap.service: Device or resource busy" / "mkswap: error: /dev/zram0 is
+# mounted". This just confirms the native swap the OS already provides is
+# actually up, rather than replacing it with a second, conflicting mechanism.
+- name: Check for active zram swap
+  ansible.builtin.command: cat /proc/swaps
+  register: base_swaps
+  changed_when: false
+  check_mode: false
 
-- name: Configure zram
-  ansible.builtin.template:
-    src: zramswap.j2
-    dest: /etc/default/zramswap
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Restart zramswap
-
-- name: Enable the zram swap service
-  ansible.builtin.systemd_service:
-    name: zramswap
-    enabled: true
-    state: started
+- name: Assert zram swap is active
+  ansible.builtin.assert:
+    that:
+      - "'zram' in base_swaps.stdout"
+    fail_msg: >-
+      No zram swap device is active (checked /proc/swaps). Raspberry Pi OS
+      bookworm and later provides this out of the box via rpi-swap; an older
+      image, a non-Raspberry-Pi-OS host, or the [Zram] section disabled in
+      /etc/rpi/swap.conf would all explain its absence. Fix that, or set
+      base_zram_enabled: false to skip this check.
+    quiet: true
 
 - name: Collect the installed packages
   ansible.builtin.package_facts:
     manager: apt
 
-# Raspberry Pi OS ships a swap *file* on the SD card, which is exactly what
-# zram is here to replace.
+# Older Raspberry Pi OS images (pre-rpi-swap) shipped a swap *file* on the SD
+# card instead, which is exactly what zram is here to replace.
 - name: Disable the SD-card swap file
   ansible.builtin.systemd_service:
     name: dphys-swapfile

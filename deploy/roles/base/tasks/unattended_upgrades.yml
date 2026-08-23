@@ -22,8 +22,19 @@
     group: root
     mode: "0644"
 
-- name: Enable the unattended-upgrades service
+# unattended-upgrades ships no persistent systemd service of its own to
+# enable — there's nothing named `unattended-upgrades.service` on a Debian
+# install, and asking systemd to enable one fails with "Could not find the
+# requested service". The APT::Periodic settings templated above are read by
+# apt's own timers instead: apt-daily.timer refreshes the package lists,
+# apt-daily-upgrade.timer is what actually invokes `unattended-upgrade` on a
+# schedule. Both ship with the base `apt` package and are enabled by default
+# on Debian, but that's made explicit here rather than assumed.
+- name: Enable the apt periodic timers
   ansible.builtin.systemd_service:
-    name: unattended-upgrades
+    name: "{{ item }}"
     enabled: true
     state: started
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer

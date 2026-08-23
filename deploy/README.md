@@ -28,6 +28,15 @@ sudo-capable account, and the system `python3` that ships with it. The
 application's own Python 3.13 is fetched by `uv` and is unrelated, even though
 trixie happens to ship the same version system-wide.
 
+Every `ansible-playbook` command below assumes key-based SSH and only prompts
+for `--ask-become-pass` (sudo, asked *after* connecting) and
+`--ask-vault-pass` (local, decrypts `vault.yml` — unrelated to the Pi at all).
+If the Pi still needs a password to log in over SSH, add `--ask-pass` (`-k`)
+to every one of them too, for a third prompt asked *before* the other two, to
+authenticate the connection itself. The two passwords are easy to conflate
+when they happen to be the same string, as they often are for a single-user
+Pi, but they're asked at genuinely different points in the connection.
+
 Elsewhere, once:
 
 - A **GitHub OAuth app** with the callback `https://<your-host>/auth/callback`.
@@ -35,7 +44,11 @@ Elsewhere, once:
   on any machine logged in to Cloudflare — and its DNS route:
   `cloudflared tunnel route dns <tunnel-id> <your-host>`. Neither is automated
   here: both are one-off account-level operations that want a human and a
-  browser login, not a playbook.
+  browser login, not a playbook. That command writes the credentials
+  `vault_mcp_tunnel_credentials` needs to `~/.cloudflared/<tunnel-id>.json` —
+  the *home directory of whatever account ran it* (`/root/.cloudflared/` if
+  that was via sudo) — not `/etc/cloudflared/`, which doesn't exist until the
+  `tunnel` role creates it. See `vault.example.yml` for the exact fields.
 
 ## Two phases: SD card first, SSD later
 
@@ -157,7 +170,7 @@ Numbered against [`docs/deployment.md`](../docs/deployment.md).
 | 3 | Own the OAuth state | `XDG_DATA_HOME` puts the store on the SSD at mode `0700`, owned by the service account |
 | 4 | Rate limit at the edge | One process keeps the in-memory bucket honest; the unauthenticated half is Cloudflare's job and is **not** configured here |
 | 5 | Handle the secrets as secrets | `ansible-vault` on the control node, `EnvironmentFile` at `0600` outside the git tree, `BROWSER_MCP_INCLUDE_ERROR_DETAILS=false` |
-| 6 | Nobody gets a shell | Dedicated system account, `nologin`, locked password, root-owned checkout it cannot rewrite, key-only SSH, nothing else on the host |
+| 6 | Nobody gets a shell | Dedicated system account, `nologin`, locked password, root-owned checkout it cannot rewrite, nothing else on the host, key-only SSH (`base_harden_ssh: true` — opt in once the key installed is somewhere durable, not just agent-forwarded from a session that might not outlive it) |
 | 7 | Protect the browser profile at rest | Confined to the service account's `0700` state directory — see the gap below |
 
 ## Gaps this playbook cannot close
