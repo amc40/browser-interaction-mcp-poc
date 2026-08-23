@@ -1,0 +1,11 @@
+# Managed by Ansible (deploy_account role) — local edits will be overwritten.
+#
+# Narrow and pinned on purpose: exact argv, no wildcards, no shell metachars
+# for sudo to worry about. These are the only two commands anything in the
+# webhook-triggered deploy flow ever needs to escalate for:
+#   - deploy_webhook.py restarts the oneshot unit that does the actual pull.
+#     restart, not start: see its own comment for why a plain `start` isn't
+#     enough to handle two triggers landing close together.
+#   - deploy.sh, run by that oneshot unit, restarts the real app afterwards.
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block {{ deploy_oneshot_systemd_unit }}.service
+{{ deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart {{ mcp_systemd_unit }}.service

@@ -18,6 +18,7 @@
           - vault_mcp_github_client_secret is defined
           - vault_mcp_tunnel_id is defined
           - vault_mcp_tunnel_credentials is defined
+          - vault_mcp_deploy_webhook_secret is defined
         fail_msg: >-
           Secrets are missing. Copy
           inventory/group_vars/browser_mcp/vault.example.yml to vault.yml, fill
@@ -99,10 +100,21 @@
       tags: [base]
     - role: storage
       tags: [storage]
+    # Before uv/browser: both chown their outputs to deploy_user/deploy_group,
+    # which this role creates.
+    - role: deploy_account
+      tags: [deploy_webhook]
     - role: uv
       tags: [uv]
     - role: browser
       tags: [browser]
+    # After uv, not before: this role starts deploy-webhook.service, whose
+    # ExecStart is a file inside the checkout uv creates. Starting it any
+    # earlier — e.g. if this were merged into deploy_account above — would
+    # fail outright on a genuinely fresh host, the exact SD-card-recovery
+    # scenario this playbook exists for.
+    - role: deploy_webhook
+      tags: [deploy_webhook]
     - role: app
       tags: [app]
     - role: tunnel
@@ -120,4 +132,9 @@
              a machine logged in to Cloudflare."
           - "Rate limit unauthenticated traffic at the Cloudflare edge: the
              in-process limiter sits behind authentication by design."
+          - "Deploy webhook URL for GitHub Actions:
+             https://{{ mcp_public_hostname }}/deploy-webhook — set it and
+             vault_mcp_deploy_webhook_secret's value as the DEPLOY_WEBHOOK_URL
+             and DEPLOY_WEBHOOK_SECRET repository secrets; see
+             deploy/README.md."
       tags: [always]

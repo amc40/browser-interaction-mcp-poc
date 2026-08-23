@@ -38,3 +38,9 @@ vault_mcp_tunnel_credentials:
   TunnelID: 00000000-0000-0000-0000-000000000000
   TunnelName: browser-interaction-mcp
   TunnelSecret: REPLACEME
+
+# Shared secret for the deploy webhook (roles/deploy_webhook): GitHub Actions
+# HMAC-signs its request with this, and the receiver verifies it. Generate
+# with `openssl rand -hex 32`; the same value goes into the DEPLOY_WEBHOOK_SECRET
+# GitHub Actions secret on the repository — see deploy/README.md.
+vault_mcp_deploy_webhook_secret: REPLACEME

@@ -1,0 +1,17 @@
+---
+# deploy_user, deploy_group and deploy_webhook_port live in
+# inventory/group_vars/browser_mcp/vars.yml instead of here: the uv, browser
+# and tunnel roles all need them too (deploy_user/group for checkout
+# ownership, deploy_webhook_port for the tunnel's ingress rule), so they are
+# deployment-wide facts rather than role-local ones — see that file's own
+# header comment.
+deploy_webhook_systemd_unit: deploy-webhook
+deploy_oneshot_systemd_unit: deploy-browser-interaction-mcp
+
+deploy_webhook_config_dir: /etc/deploy-webhook
+deploy_webhook_environment_file: "{{ deploy_webhook_config_dir }}/env"
+
+# Lives in the checkout, not templated by Ansible, so a webhook-triggered
+# deploy always runs whatever version of the script the new commit shipped
+# with. See deploy/deploy.sh.
+deploy_script: "{{ mcp_checkout_dir }}/deploy/deploy.sh"

@@ -11,6 +11,13 @@ metrics: {{ tunnel_metrics_address }}
 # The connection to Cloudflare's edge is outbound, so there is no port forward
 # and no inbound firewall rule, and the home IP never appears in DNS.
 ingress:
+  # Matched before the hostname-only rule below (first match wins), and on
+  # the same hostname/DNS record rather than a second one: no new DNS record
+  # needed for the deploy webhook (roles/deploy_webhook), just a second local
+  # service on the one tunnel already routed here.
+  - hostname: {{ mcp_public_hostname }}
+    path: ^/deploy-webhook$
+    service: http://127.0.0.1:{{ deploy_webhook_port }}
   - hostname: {{ mcp_public_hostname }}
     service: http://{{ mcp_bind_host }}:{{ mcp_port }}
   # Anything else that reaches this tunnel is not for us.

@@ -1,0 +1,67 @@
+---
+# The deploy account and its sudoers rules are provisioned by deploy_account,
+# not here — that role runs before uv and browser (both chown their outputs
+# to that account), while this role's units, below, need the checkout uv
+# creates to already exist. See deploy/site.yml.
+
+- name: Create the deploy-webhook configuration directory
+  ansible.builtin.file:
+    path: "{{ deploy_webhook_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ deploy_group }}"
+    mode: "0750"
+
+# Read by systemd as root before privileges are dropped, so it never has to
+# be readable by anything else - same reasoning as roles/app/tasks/main.yml's
+# own environment file.
+- name: Install the deploy-webhook environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ deploy_webhook_environment_file }}"
+    owner: root
+    group: "{{ deploy_group }}"
+    mode: "0600"
+  no_log: true # it holds the webhook's shared secret
+  notify: Restart deploy-webhook
+
+- name: Install the deploy-webhook systemd unit
+  ansible.builtin.template:
+    src: deploy-webhook.service.j2
+    dest: /etc/systemd/system/{{ deploy_webhook_systemd_unit }}.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart deploy-webhook
+
+# Installed, but never enabled or started here: it only ever runs when
+# deploy-webhook.service triggers it (or someone starts it by hand to test),
+# never at boot and never left running.
+- name: Install the oneshot deploy systemd unit
+  ansible.builtin.template:
+    src: deploy-browser-interaction-mcp.service.j2
+    dest: /etc/systemd/system/{{ deploy_oneshot_systemd_unit }}.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: deploy_oneshot_unit
+  notify: Restart deploy-webhook
+
+- name: Reload systemd for the new oneshot unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - deploy_oneshot_unit.changed
+    - not ansible_check_mode
+
+# On a fresh host under --check, "Install the deploy-webhook systemd unit"
+# above only simulated writing the unit file, so it isn't really on disk yet
+# for systemd to find. Same caveat as roles/app/tasks/main.yml's "Enable and
+# start the server".
+- name: Enable and start deploy-webhook
+  ansible.builtin.systemd_service:
+    name: "{{ deploy_webhook_systemd_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: not ansible_check_mode

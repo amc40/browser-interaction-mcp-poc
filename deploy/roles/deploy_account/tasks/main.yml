@@ -1,0 +1,47 @@
+---
+# Split out from deploy_webhook (rather than left as that role's first few
+# tasks) so it can run before uv and browser, which both chown their outputs
+# to this account — while the rest of deploy_webhook (which starts a systemd
+# unit whose ExecStart lives *inside* the checkout uv creates) runs after
+# them. See deploy/site.yml's role ordering comment.
+- name: Ensure sudo is installed
+  ansible.builtin.apt:
+    name: sudo
+    state: present
+
+- name: Create the deploy group
+  ansible.builtin.group:
+    name: "{{ deploy_group }}"
+    system: true
+
+# No login, ever: shell is nologin and the password is locked. A real home
+# directory is still needed though - it owns the checkout instead (see
+# roles/uv/tasks/main.yml and roles/browser/tasks/main.yml for the other
+# half of that), and Ansible's own become_user machinery, used to run git/uv
+# as this account, wants a writable HOME for its per-task scratch files;
+# without one it falls back to a shared system temp dir with a warning on
+# every run.
+- name: Create the deploy account
+  ansible.builtin.user:
+    name: "{{ deploy_user }}"
+    group: "{{ deploy_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    password: "!"
+    password_lock: true
+    create_home: true
+
+# Validated before being installed: a syntax error in a sudoers file, applied
+# without visudo's own check, can lock out sudo entirely for everyone, not
+# just deploy_user. Installed here, early, rather than in deploy_webhook:
+# nothing about it depends on the units deploy_webhook installs later
+# actually existing yet, and it belongs next to the account it grants rights
+# to.
+- name: Install the deploy sudoers rules
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: /etc/sudoers.d/deploy-webhook
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"

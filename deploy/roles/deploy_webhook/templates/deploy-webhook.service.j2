@@ -1,0 +1,49 @@
+# Managed by Ansible (deploy_webhook role) — local edits will be overwritten.
+[Unit]
+Description=deploy-webhook — verifies a signed push and triggers a code-only redeploy
+Documentation=https://github.com/amc40/browser-interaction-mcp-poc
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ deploy_user }}
+Group={{ deploy_group }}
+WorkingDirectory={{ mcp_checkout_dir }}
+EnvironmentFile={{ deploy_webhook_environment_file }}
+# Run directly with the system interpreter, not the venv - see the module
+# docstring for why it must survive a uv sync that a bad commit broke.
+ExecStart=/usr/bin/python3 {{ mcp_checkout_dir }}/src/browser_interaction_mcp/deploy_webhook.py
+Restart=on-failure
+RestartSec=5
+
+# --- Sandboxing ------------------------------------------------------------
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+UMask=0077
+
+# Deliberately absent, both because this unit shells out to sudo (see
+# templates/sudoers.j2) to trigger the oneshot deploy unit:
+#   NoNewPrivileges  — blocks exactly the setuid escalation sudo relies on.
+#   SystemCallFilter — @system-service is not guaranteed to cover whatever
+#                      syscalls sudo's own privilege transition needs, and
+#                      getting that subtly wrong would only surface as a
+#                      silent failure the one time the webhook actually fires.
+
+[Install]
+WantedBy=multi-user.target
