@@ -117,6 +117,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
+| `scripts/sainsburys_products_we_love.py` | Unverified proof of concept: first real Playwright use, not yet promoted into `tools.py` |
 
 ### Adding a browser action
 

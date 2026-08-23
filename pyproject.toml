@@ -9,6 +9,7 @@ authors = [{ name = "amc40" }]
 dependencies = [
     "fastmcp>=3.4.5,<4",
     "mcp>=1.29.0,<2",
+    "playwright>=1.56.0,<2",
     "pydantic>=2.13.4,<3",
     "pydantic-settings>=2.14.2,<3",
 ]
@@ -62,6 +63,13 @@ ignore = [
     "S101",    # asserts are the point of a test
     "S105",    # the credentials in tests are fakes, and gitleaks checks the rest
     "S106",
+]
+# One-off/exploratory scripts, not part of the tested, type-checked package:
+# mypy's `files` setting already excludes this directory, and pytest's 100%
+# coverage requirement would otherwise demand tests for throwaway code.
+"scripts/**/*.py" = [
+    "D103", # a CLI script's docstring is at module level, not repeated per-function
+    "T201", # print is the point of a CLI script's output
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]
@@ -125,4 +133,9 @@ known_first_party = ["browser_interaction_mcp"]
 [tool.deptry.per_rule_ignores]
 # `mcp` is only imported under `TYPE_CHECKING`, which deptry does not see, but
 # the types come straight from it so it stays a direct dependency.
-DEP002 = ["mcp"]
+#
+# `playwright` is only used by scripts/sainsburys_products_we_love.py so far -
+# a proof of concept not yet promoted into src/, which is all deptry scans
+# (Makefile's `deptry src tests`). Drop this once a real tool in tools.py
+# depends on it too.
+DEP002 = ["mcp", "playwright"]
