@@ -1,0 +1,25 @@
+---
+base_timezone: Europe/London
+
+# Packages every later role assumes exist.
+base_packages:
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+
+base_upgrade_packages: true
+
+base_unattended_upgrades: true
+base_unattended_upgrades_reboot: false
+base_unattended_upgrades_reboot_time: "04:00"
+
+# Key-only SSH. Refuses to apply if no authorized_keys file exists on the host,
+# so this cannot lock the operator out of a Pi that only has password login.
+base_harden_ssh: true
+
+# zram rather than a swap file: swapping to the SD card is slow and destructive.
+# Worth having even on 8GB, since Chromium wants roughly 1GB per context.
+base_zram_enabled: true
+base_zram_percent: 50
+base_zram_algorithm: zstd

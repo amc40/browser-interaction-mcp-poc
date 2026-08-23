@@ -1,0 +1,123 @@
+---
+# Provision a Raspberry Pi 4 to serve browser-interaction-mcp to claude.ai
+# through a named Cloudflare Tunnel. The plan this implements, and the reasoning
+# behind the topology, are in docs/pi-deployment.md; the mitigations it applies
+# are numbered in docs/deployment.md.
+#
+#   ansible-playbook site.yml --ask-vault-pass --check --diff   # first
+#   ansible-playbook site.yml --ask-vault-pass                  # then
+- name: Provision the browser interaction MCP server
+  hosts: browser_mcp
+  become: true
+
+  pre_tasks:
+    - name: Assert the vaulted secrets are available
+      ansible.builtin.assert:
+        that:
+          - vault_mcp_github_client_id is defined
+          - vault_mcp_github_client_secret is defined
+          - vault_mcp_tunnel_id is defined
+          - vault_mcp_tunnel_credentials is defined
+        fail_msg: >-
+          Secrets are missing. Copy
+          inventory/group_vars/browser_mcp/vault.example.yml to vault.yml, fill
+          it in, encrypt it with `ansible-vault encrypt`, and pass
+          --ask-vault-pass (or --vault-password-file).
+        quiet: true
+      tags: [always]
+
+    # Catches the one placeholder most likely to survive into a real run: the
+    # tunnel role writes vault_mcp_tunnel_id/credentials straight over
+    # whatever's at /etc/cloudflared, including a real named tunnel already
+    # set up by hand, so a leftover example UUID would silently clobber it
+    # with nonsense rather than fail loudly.
+    - name: Assert the vaulted tunnel credentials aren't still the example
+      ansible.builtin.assert:
+        that:
+          - vault_mcp_tunnel_id != '00000000-0000-0000-0000-000000000000'
+        fail_msg: >-
+          vault_mcp_tunnel_id is still the placeholder UUID from
+          vault.example.yml. Set it to the real tunnel ID from `cloudflared
+          tunnel create` (and vault_mcp_tunnel_credentials to that command's
+          credentials file) before running this against a host that already
+          has a tunnel set up — otherwise this overwrites it.
+        quiet: true
+      tags: [always]
+
+    - name: Assert the public hostname has been set
+      ansible.builtin.assert:
+        that:
+          - mcp_public_hostname is defined
+        fail_msg: >-
+          mcp_public_hostname is not set. Copy
+          inventory/group_vars/browser_mcp/local.yml.example to local.yml (it's
+          gitignored, same as vault.yml) and set it to your named tunnel's
+          hostname on a domain you own. claude.ai stores the connector URL, so
+          an ephemeral trycloudflare.com name would break on every restart.
+        quiet: true
+      tags: [always]
+
+    # A Pi 4 old enough to still be running a 32-bit userland needs a
+    # reinstall, not a workaround: Playwright ships no armhf browsers. Worth
+    # failing on before anything is installed.
+    - name: Assert a 64-bit userland
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['architecture'] == 'aarch64'
+        fail_msg: >-
+          This host reports {{ ansible_facts['architecture'] }}. Playwright
+          publishes no armhf browser builds, so a 64-bit Raspberry Pi OS
+          install is required.
+        quiet: true
+      tags: [always]
+
+    - name: Read the firmware throttling flags
+      ansible.builtin.command: vcgencmd get_throttled
+      register: mcp_throttled
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      tags: [always]
+
+    # Under-voltage on an always-on service surfaces as random unexplained
+    # failures, so it is worth saying out loud rather than diagnosing later.
+    # A warning, not a failure: the playbook still provisions correctly.
+    - name: Warn about under-voltage or throttling
+      ansible.builtin.debug:
+        msg: >-
+          {{ mcp_throttled.stdout }} — this Pi has been throttled or
+          under-volted. Use the official 3A PSU and a powered SSD enclosure
+          before treating slow page loads as flaky selectors.
+      when:
+        - mcp_throttled.rc == 0
+        - mcp_throttled.stdout is defined
+        - mcp_throttled.stdout != 'throttled=0x0'
+      tags: [always]
+
+  roles:
+    - role: base
+      tags: [base]
+    - role: storage
+      tags: [storage]
+    - role: uv
+      tags: [uv]
+    - role: browser
+      tags: [browser]
+    - role: app
+      tags: [app]
+    - role: tunnel
+      tags: [tunnel]
+
+  post_tasks:
+    - name: Report what is left to do by hand
+      ansible.builtin.debug:
+        msg:
+          - "Connector URL for claude.ai: https://{{ mcp_public_hostname }}/mcp"
+          - "GitHub OAuth app callback must be:
+             https://{{ mcp_public_hostname }}/auth/callback"
+          - "DNS for the tunnel is not managed here — run `cloudflared tunnel
+             route dns {{ mcp_tunnel_id }} {{ mcp_public_hostname }}` once, from
+             a machine logged in to Cloudflare."
+          - "Rate limit unauthenticated traffic at the Cloudflare edge: the
+             in-process limiter sits behind authentication by design."
+      tags: [always]

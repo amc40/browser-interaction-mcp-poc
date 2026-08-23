@@ -1,0 +1,10 @@
+// Managed by Ansible (base role) — local edits will be overwritten.
+//
+// Only the default origins are patched automatically. The Cloudflare
+// repository the `tunnel` role adds is deliberately not in that set: an
+// unattended cloudflared upgrade would drop the tunnel, and the connector with
+// it, at whatever time the timer fires.
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "{{ base_unattended_upgrades_reboot | bool | ternary('true', 'false') }}";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ base_unattended_upgrades_reboot_time }}";

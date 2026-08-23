@@ -1,0 +1,17 @@
+# Managed by Ansible (tunnel role) — local edits will be overwritten.
+#
+# A named tunnel on a domain you own, not a trycloudflare.com quick tunnel:
+# claude.ai stores the connector URL, so an ephemeral hostname would break the
+# connector on every restart.
+tunnel: {{ mcp_tunnel_id }}
+credentials-file: {{ tunnel_config_dir }}/{{ mcp_tunnel_id }}.json
+no-autoupdate: true
+metrics: {{ tunnel_metrics_address }}
+
+# The connection to Cloudflare's edge is outbound, so there is no port forward
+# and no inbound firewall rule, and the home IP never appears in DNS.
+ingress:
+  - hostname: {{ mcp_public_hostname }}
+    service: http://{{ mcp_bind_host }}:{{ mcp_port }}
+  # Anything else that reaches this tunnel is not for us.
+  - service: http_status:404

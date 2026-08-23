@@ -1,6 +1,9 @@
 # Deploying to a Raspberry Pi as a claude.ai connector
 
-**Status: planned, not implemented.** Nothing here is built yet.
+**Status: planned, partly built.** The provisioning playbook this document
+specifies now exists in [`deploy/`](../deploy/README.md), drafted but never run
+against real hardware. Nothing else here is built: the server still has no
+browser actions to deploy.
 
 [`deployment.md`](deployment.md) lists *what must change* before this runs on a
 server, independently of where that server is. This document picks the where,
@@ -132,9 +135,11 @@ Further notes specific to this board:
 
 - **Storage.** The Pi 4 has no PCIe connector, so the SSD goes in a USB 3.0 port
   rather than on an NVMe HAT. An always-on Chromium writes to its profile and
-  cache constantly, which is what kills SD cards. Relocate the browser profile
-  and cache to the SSD at minimum. Prefer a powered enclosure, or the official
-  3A PSU.
+  cache constantly, which is what kills SD cards, so getting off it eventually
+  matters — but it doesn't have to happen before the server can run. The
+  playbook in `deploy/` starts on the SD card by default and migrates onto an
+  SSD once one exists; see [`deploy/README.md`](../deploy/README.md#two-phases-sd-card-first-ssd-later).
+  Prefer a powered enclosure, or the official 3A PSU, whenever the SSD arrives.
 - **Cooling.** The Cortex-A72 throttles around 80 °C and the Pi 4 reaches it
   under sustained load in a closed case. Chromium rendering is exactly that load
   pattern, and throttling presents as intermittently slow page loads — easily
@@ -147,10 +152,19 @@ Further notes specific to this board:
 
 ## Provisioning with Ansible
 
+The playbook implementing this section is in [`deploy/`](../deploy/README.md),
+which also records the two ordering-driven departures from the role table below
+and the mitigations no playbook can apply until the code exposes them.
+
 Agentless, so the control node is a laptop and the Pi needs only SSH and a
-system `python3`. Raspberry Pi OS Bookworm ships 3.11, which satisfies Ansible's
-target-side requirement; that is unrelated to the 3.13 the application needs,
-which `uv` fetches as its own standalone arm64 build.
+system `python3`. Current Raspberry Pi OS images are rebased on Debian 13
+(trixie, since October 2025) and ship Python 3.13, which comfortably satisfies
+Ansible's target-side requirement; that is coincidentally the same version the
+application needs, but unrelated in practice, since `uv` fetches its own
+standalone arm64 build rather than using the system interpreter. An older
+bookworm image (Python 3.11) still satisfies Ansible's requirement too, but see
+[`deploy/roles/browser/vars/main.yml`](../deploy/roles/browser/vars/main.yml)
+for the apt package names that change between the two.
 
 The justification for automating a single host is recovery: when the SD card
 fails, provisioned means one command rather than an evening rediscovering which
@@ -202,7 +216,7 @@ libraries Chromium needed.
 | Serve over HTTP | `BROWSER_MCP_TRANSPORT=http` | `settings.py:33` defaults to stdio; the `run` target in the `Makefile` is stdio-only |
 | Public OAuth base URL | `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` | Already supported; see [above](#what-the-tunnel-changes-about-authentication) |
 | Browser actions | `tools.py` | Currently only `server_info`; the deployment is untested against real browser work until these exist |
-| Playbook | `deploy/` | One app, one host — a second repository buys nothing at this size |
+| Playbook | `deploy/` | Done: one app, one host — a second repository buys nothing at this size |
 
 Authentication needs no code change: it landed with SDR 0001.
 

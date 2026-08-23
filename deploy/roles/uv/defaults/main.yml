@@ -1,0 +1,13 @@
+---
+# Pinned deliberately, and worth keeping in step with the uv_build pin in
+# pyproject.toml. The Pi is not the place to discover that a new uv resolves
+# differently.
+uv_version: "0.11.31"
+uv_install_dir: /usr/local/bin
+
+# Root-owned and outside the service account's reach: uv runs as root at
+# provision time, and the service account only ever reads what it produced.
+uv_cache_dir: /var/cache/uv
+# uv fetches its own standalone Python 3.13 arm64 build here. Unrelated to the
+# system python3 that Ansible itself needs on the target.
+uv_python_install_dir: /opt/uv/python

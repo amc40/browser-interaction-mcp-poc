@@ -1,0 +1,13 @@
+# Managed by Ansible (base role) — local edits will be overwritten.
+#
+# Key-only SSH. This host holds live authenticated browser sessions for
+# third-party services, which are worth more than the GitHub token guarding
+# them (docs/deployment.md §7), and anyone with a shell here can drive them
+# (§6).
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+
+# prohibit-password rather than no: root over a key stays available as the way
+# back in if the service account or sudo configuration is broken.
+PermitRootLogin prohibit-password

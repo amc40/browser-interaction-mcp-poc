@@ -1,0 +1,15 @@
+---
+tunnel_service_name: cloudflared
+tunnel_user: cloudflared
+tunnel_group: cloudflared
+tunnel_config_dir: /etc/cloudflared
+
+# Cloudflare's own apt repository, so the arm64 build comes from a signed source
+# and can be upgraded deliberately. `unattended-upgrades` is not pointed at it:
+# an unattended restart here drops the connector.
+tunnel_apt_key_url: https://pkg.cloudflare.com/cloudflare-main.gpg
+tunnel_apt_uri: https://pkg.cloudflare.com/cloudflared
+
+# Loopback-only Prometheus endpoint. Useful for answering "is the tunnel up"
+# without reading the journal, and reachable from nowhere else.
+tunnel_metrics_address: 127.0.0.1:2000

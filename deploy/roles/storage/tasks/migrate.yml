@@ -1,0 +1,71 @@
+---
+# Included from main.yml only under `--tags migrate`, and only when
+# storage_mount_ssd is true — by which point the tasks above it have already
+# mounted the SSD at mcp_ssd_mountpoint. Self-contained: installs the one tool
+# it needs itself rather than assuming another role already did, since a
+# tags-filtered run executes only what's tagged `migrate`.
+- name: Install rsync
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+
+- name: Check whether Phase 1's SD-card state still exists
+  ansible.builtin.stat:
+    path: "{{ item.src }}"
+  loop:
+    - src: "{{ mcp_sd_state_dir }}"
+      dest: "{{ mcp_ssd_mountpoint }}/browser-interaction-mcp"
+    - src: "{{ mcp_sd_browsers_dir }}"
+      dest: "{{ mcp_ssd_mountpoint }}/playwright"
+  loop_control:
+    label: "{{ item.src }}"
+  register: storage_migrate_paths
+
+- name: Report there is nothing to migrate
+  ansible.builtin.debug:
+    msg: >-
+      Nothing found at {{ mcp_sd_state_dir }} or {{ mcp_sd_browsers_dir }} —
+      either this host went straight to Phase 2, or migration already ran.
+  when: storage_migrate_paths.results | selectattr('stat.exists') | list | length == 0
+
+# The server keeps a live browser session and an OAuth token store in the
+# state it's about to have copied out from under it (docs/deployment.md §7);
+# stopping first avoids copying either mid-write.
+- name: Migrate the SD-card state onto the SSD
+  when: storage_migrate_paths.results | selectattr('stat.exists') | list | length > 0
+  block:
+    - name: Stop the server before copying its state
+      ansible.builtin.systemd_service:
+        name: "{{ mcp_systemd_unit }}"
+        state: stopped
+      # Absent on a host that jumps straight from nothing to Phase 2 without
+      # ever having run Phase 1 first — nothing to stop, and that's fine.
+      failed_when: false
+
+    - name: Copy the SD-card state onto the SSD
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - -aHAX
+          - "{{ item.item.src }}/"
+          - "{{ item.item.dest }}/"
+      loop: "{{ storage_migrate_paths.results }}"
+      loop_control:
+        label: "{{ item.item.src }} -> {{ item.item.dest }}"
+      when: item.stat.exists
+      changed_when: true
+
+    # Deliberately not deleted here: an Ansible task is the wrong place for an
+    # irreversible removal of the only copy of a live, authenticated browser
+    # profile. The operator confirms it works, then removes it by hand.
+    - name: Report what to do next
+      ansible.builtin.debug:
+        msg:
+          - "Copied onto the SSD. The SD-card copies at {{ mcp_sd_state_dir }}
+             and {{ mcp_sd_browsers_dir }} were left in place, not deleted."
+          - "Now run: ansible-playbook site.yml --ask-become-pass
+             --ask-vault-pass (no --tags) to point everything at the SSD and
+             restart the service."
+          - "Once you've confirmed it's working from the SSD (systemctl status
+             {{ mcp_systemd_unit }}, and a real tool call from claude.ai),
+             remove the SD-card copies by hand."

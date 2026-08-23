@@ -1,0 +1,11 @@
+---
+# storage_mount_ssd and storage_ssd_uuid live in
+# inventory/group_vars/browser_mcp/vars.yml, not here: they're the two-phase
+# switch (see the comment there), not a role-internal detail, so they're kept
+# visible in the file operators already edit rather than in this one.
+
+storage_ssd_fstype: ext4
+# nofail so a missing or unplugged SSD does not leave the Pi stuck in the
+# initramfs; the app unit has RequiresMountsFor and will refuse to start
+# instead, which is the failure mode you can actually diagnose remotely.
+storage_ssd_options: defaults,noatime,nofail,x-systemd.device-timeout=30

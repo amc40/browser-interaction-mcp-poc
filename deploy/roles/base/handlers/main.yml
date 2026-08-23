@@ -1,0 +1,10 @@
+---
+- name: Restart sshd
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: restarted
+
+- name: Restart zramswap
+  ansible.builtin.systemd_service:
+    name: zramswap
+    state: restarted

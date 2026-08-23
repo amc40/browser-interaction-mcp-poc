@@ -1,0 +1,44 @@
+# Managed by Ansible (tunnel role) — local edits will be overwritten.
+[Unit]
+Description=Cloudflare Tunnel for {{ mcp_public_hostname }}
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+After=network-online.target {{ mcp_systemd_unit }}.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ tunnel_user }}
+Group={{ tunnel_group }}
+ExecStart=/usr/bin/cloudflared --config {{ tunnel_config_dir }}/config.yml --no-autoupdate tunnel run
+Restart=on-failure
+RestartSec=5
+
+# --- Sandboxing ------------------------------------------------------------
+# A Go binary that opens outbound connections and reads two files, so it can be
+# confined much harder than the server it fronts.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

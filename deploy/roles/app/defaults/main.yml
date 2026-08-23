@@ -1,0 +1,16 @@
+---
+app_config_dir: /etc/browser-interaction-mcp
+
+# The console script declared in the application's pyproject.toml, which uv
+# installs into the checkout's venv. The unit runs it directly rather than
+# through `uv run`, so nothing needs uv, a network or a writable checkout at
+# runtime.
+app_console_script: browser-interaction-mcp
+
+# Restart on failure, but give up after a few attempts in a short window. A
+# settings error is fatal at startup by design (unknown BROWSER_MCP_* keys are
+# rejected), and without a limit that becomes a restart loop rather than a
+# service that is visibly, diagnosably dead.
+app_restart_sec: 5
+app_start_limit_interval_sec: 300
+app_start_limit_burst: 5

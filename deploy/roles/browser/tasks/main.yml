@@ -1,0 +1,59 @@
+---
+- name: Install Chromium's shared library dependencies
+  ansible.builtin.apt:
+    name: "{{ browser_apt_packages }}"
+    state: present
+
+- name: Install xvfb
+  ansible.builtin.apt:
+    name: xvfb
+    state: present
+  when: browser_install_xvfb | bool
+
+# The application does not depend on Playwright yet — tools.py exposes only
+# server_info, and browser automation is still on the "not done yet" list. Rather
+# than fail on a checkout that is correct for today, detect it and say so.
+- name: Check whether Playwright is in the synced environment
+  ansible.builtin.command: "{{ mcp_checkout_dir }}/.venv/bin/python -c 'import playwright'"
+  register: browser_playwright_present
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Report that the browser install was skipped
+  ansible.builtin.debug:
+    msg: >-
+      Playwright is not a dependency of the checkout at {{ mcp_repo_version }},
+      so no browser was downloaded. The apt libraries above are installed and
+      ready; re-run with --tags browser once tools.py drives a real browser.
+  when: browser_playwright_present.rc != 0
+
+- name: Install the Playwright browsers
+  # Not idempotent — it reports work on every run — so the change is judged from
+  # its output rather than its exit code.
+  ansible.builtin.command:
+    argv:
+      - "{{ mcp_checkout_dir }}/.venv/bin/playwright"
+      - install
+      - "{{ item }}"
+  environment:
+    PLAYWRIGHT_BROWSERS_PATH: "{{ mcp_browsers_dir }}"
+  loop: "{{ browser_playwright_browsers }}"
+  register: browser_install
+  changed_when: (browser_install.stdout ~ browser_install.stderr) is search('[Dd]ownload')
+  when:
+    - browser_playwright_present.rc == 0
+    - not ansible_check_mode
+  notify: Restart browser-interaction-mcp
+
+- name: Make the downloaded browsers world-readable
+  ansible.builtin.file:
+    path: "{{ mcp_browsers_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: u=rwX,go=rX
+    recurse: true
+  when:
+    - browser_playwright_present.rc == 0
+    - not ansible_check_mode
