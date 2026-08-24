@@ -41,6 +41,12 @@ class ProductsWeLove(BaseModel):
     )
 
 
+class AddedToBasket(BaseModel):
+    """Confirmation that a product was added to the Sainsbury's basket."""
+
+    product: str = Field(description="Name of the product added, as shown on its page.")
+
+
 def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
     """Register every pre-approved tool on ``mcp``.
 
@@ -75,3 +81,35 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         (sainsburys.co.uk/gol-ui/groceries) - no login or credentials involved.
         """
         return ProductsWeLove(products=sainsburys.products_we_love())
+
+    @mcp.tool(
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "openWorldHint": True,
+        },
+    )
+    def sainsburys_add_to_basket() -> AddedToBasket:
+        """Add one of a fixed demo product to the Sainsbury's basket.
+
+        Needs an already-authenticated Sainsbury's session: run
+        `scripts/sainsburys_login.py` locally to log in by hand and capture
+        one, then point `BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH` at the
+        saved file. The server never sees a password - it only ever replays a
+        session captured that way. Raises if that has not been set up, or if
+        the saved session is no longer accepted.
+
+        Unverified against the real site - see `sainsburys.py`'s docstring.
+        """
+        storage_state_path = settings.sainsburys_storage_state_path
+        if storage_state_path is None:
+            msg = (
+                "BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH is not set. Run "
+                "scripts/sainsburys_login.py locally, with your own "
+                "Sainsbury's credentials, to log in once and capture a "
+                "session - then point this setting at the file it saves."
+            )
+            raise sainsburys.NotLoggedInError(msg)
+
+        product = sainsburys.add_to_basket(storage_state_path=storage_state_path)
+        return AddedToBasket(product=product)

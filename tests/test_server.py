@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path  # noqa: TC003 - used at runtime to build paths in tests
 from typing import TYPE_CHECKING
 
 import pytest
@@ -27,6 +28,7 @@ async def test_server_exposes_only_registered_tools(
     assert [tool.name for tool in tools] == [
         "server_info",
         "sainsburys_products_we_love",
+        "sainsburys_add_to_basket",
     ]
 
 
@@ -66,6 +68,42 @@ async def test_sainsburys_products_we_love_wires_to_the_browser_action(
         "Chocolate Digestives 400g",
         "Semi Skimmed Milk 2L",
     ]
+
+
+async def test_sainsburys_add_to_basket_wires_to_the_browser_action(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticate: Authenticate,
+    tmp_path: Path,
+) -> None:
+    """Only checks the wiring - test_sainsburys.py covers the action itself."""
+    authenticate()
+    storage_state_path = tmp_path / "session.json"
+    storage_state_path.write_text("{}", encoding="utf-8")
+    settings = Settings(sainsburys_storage_state_path=storage_state_path)
+    seen_paths: list[Path] = []
+
+    def fake_add_to_basket(*, storage_state_path: Path, **_kwargs: object) -> str:
+        seen_paths.append(storage_state_path)
+        return "Chocolate Digestives 400g"
+
+    monkeypatch.setattr(sainsburys, "add_to_basket", fake_add_to_basket)
+
+    async with Client(build_server(settings)) as client:
+        result = await client.call_tool("sainsburys_add_to_basket")
+
+    assert result.data.product == "Chocolate Digestives 400g"
+    assert seen_paths == [storage_state_path]
+
+
+async def test_sainsburys_add_to_basket_refuses_without_a_saved_session(
+    authenticate: Authenticate,
+) -> None:
+    authenticate()
+    settings = Settings(sainsburys_storage_state_path=None, include_error_details=True)
+
+    async with Client(build_server(settings)) as client:
+        with pytest.raises(ToolError, match=r"sainsburys_login\.py"):
+            await client.call_tool("sainsburys_add_to_basket")
 
 
 async def test_server_is_named_and_documented() -> None:

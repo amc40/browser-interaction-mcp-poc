@@ -25,6 +25,7 @@ def test_defaults_are_conservative() -> None:
     assert settings.github_token_cache_seconds == 300
     assert settings.github_client_id is None
     assert settings.github_client_secret is None
+    assert settings.sainsburys_storage_state_path is None
 
 
 def test_environment_overrides_defaults(
@@ -140,6 +141,21 @@ def test_oauth_base_url_can_be_overridden() -> None:
     )
 
     assert settings.oauth_base_url == "https://mcp.example.com"
+
+
+def test_sainsburys_storage_state_path_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage_state_path = tmp_path / "sainsburys_storage_state.json"
+    monkeypatch.setenv(
+        "BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH",
+        str(storage_state_path),
+    )
+
+    settings = Settings()
+
+    assert settings.sainsburys_storage_state_path == storage_state_path
 
 
 def test_the_client_secret_is_not_printed() -> None:

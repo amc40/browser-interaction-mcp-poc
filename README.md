@@ -19,7 +19,29 @@ Sainsbury's (and Tesco, tested for comparison) run Akamai Bot Manager, which
 blocks *headless* Chromium specifically, regardless of network origin or user
 agent. `browser_interaction_mcp.browser.browser_page(headless=False)` runs a
 real, visible-mode Chromium under a short-lived Xvfb display instead, which
-gets through cleanly - see that module and `sainsburys.py`'s docstrings. See
+gets through cleanly - see that module and `sainsburys.py`'s docstrings.
+
+A second action, `sainsburys_add_to_basket`, needs to act as a logged-in
+account rather than reading a public page, so it takes a different approach
+to authentication than the GitHub OAuth above: the *session context*
+approach. The server never holds a Sainsbury's password. Instead
+`scripts/sainsburys_login.py` is run locally, by hand, by the operator: it
+opens a real browser, the operator logs in themself, and Playwright's
+`storage_state` - the resulting cookies and local storage, not the
+credentials that produced them - is captured to a file.
+`browser_page(storage_state=...)` then seeds a fresh context from that file,
+the same way restoring a saved browser profile would, so the tool call
+replays an already-authenticated session instead of ever performing a login.
+See `browser.py`'s and `sainsburys.py`'s docstrings, and
+`Settings.sainsburys_storage_state_path`.
+
+**`sainsburys_add_to_basket` is unverified against the real site.** It was
+written the same way `products_we_love` first was (see the commit history),
+but validating it needs a captured session, which needs credentials this
+project does not have and should not be given inside an automated session -
+see the script's own docstring for why. `scripts/sainsburys_add_to_basket.py`
+exists for whoever has those credentials to run it for real and fix whatever
+the real page's locators turn out to need. See
 [Not done yet](#not-done-yet).
 
 It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
@@ -134,6 +156,8 @@ fact that shell access on the host bypasses all of this.
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
 | `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
+| `scripts/sainsburys_login.py` | Run locally, by hand, with your own credentials: logs in to Sainsbury's for real and captures the session `add_to_basket` replays |
+| `scripts/sainsburys_add_to_basket.py` | CLI wrapper to run `sainsburys_add_to_basket` directly, for validating it against the real page once a session exists |
 
 ### Adding a browser action
 
@@ -212,4 +236,16 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 - **Authentication on stdio**, which cannot carry credentials at all. The http
   transport binds to loopback by default for the same reason. See
   [SDR 0001](docs/sdr/0001-github-authentication.md).
-- **Persistent credential storage** for the service being automated.
+- **Verifying `sainsburys_add_to_basket` against the real, logged-in site.**
+  The session-context *mechanism* - `scripts/sainsburys_login.py`,
+  `browser_page(storage_state=...)`, `Settings.sainsburys_storage_state_path` -
+  is written and tested against a fake page. The action's own locators are
+  not: nobody has run `scripts/sainsburys_login.py` with real credentials yet,
+  so `add_to_basket` has never been driven against the real, authenticated
+  page. `DEFAULT_PRODUCT_URL` in particular is a guessed URL, not a verified
+  one.
+- **Encrypting the captured session at rest.** `sainsburys_login.py` writes
+  the `storage_state` file with owner-only permissions, but it's still a
+  plaintext file on disk holding a working login - see
+  [`docs/deployment.md`](docs/deployment.md) §7, which already flags this as
+  the actual thing worth stealing once a browser action drives one.
