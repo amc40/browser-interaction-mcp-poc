@@ -15,12 +15,27 @@ only replay a session someone else already established. See
 `docs/deployment.md` §7 for why that captured session is worth protecting as
 carefully as the credentials it stands in for.
 
-**`add_to_basket` is unverified against the real site** - see the
-"Not done yet" section of the README. It cannot be exercised without a
-captured session, which this sandbox has no credentials to create; treat its
-locators as a first draft to validate with `scripts/sainsburys_add_to_basket.py`
-once one exists, the way `products_we_love` itself was (see the commit that
-first added it, before the fixes that followed from running it for real).
+**`add_to_basket` itself is still unverified against the real, authenticated
+site** - see the "Not done yet" section of the README - but its selectors are
+no longer guesses: they were taken from a real Playwright codegen recording
+of a manual login and search-and-add flow, not invented. What that recording
+showed, and isn't obvious from the public pages alone:
+
+- The login flow lives at `/gol-ui/oauth/login`, distinct from the public
+  groceries site, and its cookie consent button reads "Required only" -
+  different text from the "Continue and accept" `products_we_love` dismisses.
+  `_dismiss_cookie_banner` matches either.
+- MFA, when Sainsbury's asks for it, happens on a *different domain*
+  (`account.sainsburys.co.uk/gol/login/mfa`) - not something `add_to_basket`
+  itself ever has to handle, since by the time it runs the session is already
+  captured, but `scripts/sainsburys_login.py` has to recognise it as "still
+  logging in", not "done".
+- Search is a `combobox`, filled and submitted with Enter - not a URL query
+  parameter.
+- Each search result is `data-testid="product-tile-<id>"`, and adding it to
+  the basket is `data-testid="add-button"` *inside that same tile* - directly
+  from the results, with no separate "Add to basket"-named button and no need
+  to open the product page first.
 
 Verified against the real page from the deployment host (not this dev
 sandbox, whose network path Sainsbury's Akamai edge blocks outright - see
@@ -42,6 +57,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 from browser_interaction_mcp.browser import browser_page
 
 if TYPE_CHECKING:
@@ -50,22 +67,20 @@ if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page
 
 GROCERIES_URL = "https://www.sainsburys.co.uk/gol-ui/groceries"
+MY_ACCOUNT_URL = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
 
-# A real product page, guessed from Sainsbury's URL pattern rather than
-# verified by loading it - see the module docstring. Good enough to give
-# `add_to_basket` a default that isn't obviously a placeholder; wrong the
-# moment the real page is checked and this can be swapped for it.
-DEFAULT_PRODUCT_URL = (
-    "https://www.sainsburys.co.uk/gol-ui/product/"
-    "sainsburys-british-semi-skimmed-milk-2-27l-4pt"
-)
+#: Search term `add_to_basket` uses when the caller doesn't give one -
+#: verified against the real site: see the module docstring.
+DEFAULT_SEARCH_QUERY = "washing up liquid"
 
 _PRODUCTS_WE_LOVE_HEADING = re.compile("products we love", re.IGNORECASE)
 
-# OneTrust's own button text here is "Continue and accept" - kept broad
-# ("accept" anywhere in the name) since consent-management vendors change
-# their copy without warning, and this is scoped to a button element already.
-_COOKIE_ACCEPT_NAME = re.compile("accept", re.IGNORECASE)
+# Two different consent-management copies seen on the real site: "Continue
+# and accept" on the public groceries homepage, "Required only" on the
+# oauth/login flow. Matched broadly ("accept" or "required only" anywhere in
+# the name) since consent-management vendors change their copy without
+# warning, and this is scoped to a button element already.
+_COOKIE_ACCEPT_NAME = re.compile("accept|required only", re.IGNORECASE)
 
 # Non-product headings that can appear inside/around the carousel widget
 # (an accessible label for the carousel region, a trailing copyright-terms
@@ -73,11 +88,22 @@ _COOKIE_ACCEPT_NAME = re.compile("accept", re.IGNORECASE)
 _NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE)
 
 # Sainsbury's own login page, redirected to when a session isn't (or is no
-# longer) authenticated. Checked by path only, not the full URL, since query
-# strings there commonly carry a return-to address.
-_LOGIN_PATH = "/gol-ui/login"
+# longer) authenticated - taken from a real login recording, not guessed.
+# Checked by path only, not the full URL, since query strings there commonly
+# carry a return-to address.
+_LOGIN_PATH = "/gol-ui/oauth/login"
 
-_ADD_TO_BASKET_NAME = re.compile("add to basket", re.IGNORECASE)
+# Accessible name of the site search box, from the same recording. Matched by
+# prefix since the trailing "...or tab to ..." reads like a hint that could
+# change independently of the field's purpose.
+_SEARCH_BOX_NAME = re.compile("^Enter search terms", re.IGNORECASE)
+
+# Search results render as `data-testid="product-tile-<id>"`, each containing
+# its own `data-testid="add-button"` - adding straight from a results tile,
+# with no separate "Add to basket"-named control and no need to open the
+# product page first. Confirmed against a real search-and-add recording.
+_PRODUCT_TILE_SELECTOR = '[data-testid^="product-tile-"]'
+_ADD_BUTTON_TEST_ID = "add-button"
 
 
 class NotLoggedInError(RuntimeError):
@@ -197,50 +223,63 @@ def _check_logged_in(page: Page) -> None:
 
 
 def add_to_basket(
-    url: str = DEFAULT_PRODUCT_URL,
+    query: str = DEFAULT_SEARCH_QUERY,
     *,
     storage_state_path: Path,
     quantity: int = 1,
 ) -> str:
-    """Add ``quantity`` of the product at ``url`` to the basket.
+    """Search for ``query`` and add its first result to the basket.
 
     Requires an already-authenticated session - see the module docstring and
-    `browser.browser_page`'s `storage_state` parameter. This action is
-    unverified against the real site (see the module docstring); expect its
-    locators to need fixing against the actual page before it works.
+    `browser.browser_page`'s `storage_state` parameter. Mirrors a real,
+    manually recorded search-and-add flow (site search, then the result
+    tile's own "add" control) rather than opening the product's own page -
+    see the module docstring for what that recording showed. Still unverified
+    end to end against a real, authenticated session - see the README's
+    "Not done yet" section.
 
     Args:
-        url: Product page to load. Defaults to a single guessed product -
-            see `DEFAULT_PRODUCT_URL`.
+        query: Search term, typed into the site's own search box exactly as
+            a person would. Defaults to a term verified against the real
+            site - see `DEFAULT_SEARCH_QUERY`.
         storage_state_path: Path to a Playwright `storage_state` JSON file
             holding a logged-in session, captured by
             `scripts/sainsburys_login.py`.
-        quantity: How many of the product to add. Clicks the "Add to basket"
-            control this many times, since that is what a first-time add
-            does on Sainsbury's own product pages - there is no quantity
-            field until at least one is already in the basket.
+        quantity: How many of the product to add. Clicks the result tile's
+            "add" control this many times.
 
     Returns:
-        The product's name, as shown on the page, confirming what was added.
+        The added product's name, as shown on its result tile.
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
-        RuntimeError: If the "Add to basket" control cannot be found.
+        RuntimeError: If no matching result, or no "add" control on it, is
+            found.
     """
     with browser_page(headless=False, storage_state=storage_state_path) as page:
-        page.goto(url, wait_until="load", timeout=30_000)
+        page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=30_000)
         _dismiss_cookie_banner(page)
         _check_logged_in(page)
 
-        name_heading = page.get_by_role("heading", level=1).first
-        _wait_for_page_to_settle(name_heading)
-        product_name = name_heading.inner_text().strip()
+        search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
+        search_box.click()
+        search_box.fill(query)
+        search_box.press("Enter")
 
-        add_button = page.get_by_role("button", name=_ADD_TO_BASKET_NAME).first
+        tile = page.locator(_PRODUCT_TILE_SELECTOR).first
+        try:
+            _wait_for_page_to_settle(tile)
+        except PlaywrightTimeoutError as exc:
+            msg = f"No search results found for {query!r}."
+            raise RuntimeError(msg) from exc
+
+        product_name = tile.get_by_role("heading").first.inner_text().strip()
+
+        add_button = tile.get_by_test_id(_ADD_BUTTON_TEST_ID)
         if add_button.count() == 0:
             msg = (
-                '"Add to basket" control not found on the page. Either the '
-                "product page has changed, or the product is unavailable."
+                f'No "add" control found on the result for {query!r}. Either '
+                "the page has changed, or the product is unavailable."
             )
             raise RuntimeError(msg)
 

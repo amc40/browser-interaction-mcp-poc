@@ -35,13 +35,23 @@ replays an already-authenticated session instead of ever performing a login.
 See `browser.py`'s and `sainsburys.py`'s docstrings, and
 `Settings.sainsburys_storage_state_path`.
 
-**`sainsburys_add_to_basket` is unverified against the real site.** It was
-written the same way `products_we_love` first was (see the commit history),
-but validating it needs a captured session, which needs credentials this
-project does not have and should not be given inside an automated session -
-see the script's own docstring for why. `scripts/sainsburys_add_to_basket.py`
-exists for whoever has those credentials to run it for real and fix whatever
-the real page's locators turn out to need. See
+Its selectors aren't guesses: they were taken from a real Playwright codegen
+recording of a manual login and search-and-add flow, which also corrected
+several assumptions the login flow's own design had made from the public
+groceries site alone - the login path (`/gol-ui/oauth/login`), a different
+cookie-consent copy ("Required only"), MFA living on a separate domain
+(`account.sainsburys.co.uk`) and not always appearing, and adding a product
+straight from its search-result tile (`data-testid="add-button"`) rather than
+needing to open the product's own page first. See `sainsburys.py`'s module
+docstring for the detail.
+
+**`sainsburys_add_to_basket` is still unverified end to end.** Its selectors
+are drawn from a real recording rather than invented, but nobody has run it
+against a real, authenticated session yet - that needs credentials this
+project does not have and should not be given inside an automated session,
+see `scripts/sainsburys_login.py`'s own docstring for why.
+`scripts/sainsburys_add_to_basket.py` exists for whoever has those
+credentials to run it for real and fix whatever still doesn't match. See
 [Not done yet](#not-done-yet).
 
 It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
@@ -239,11 +249,12 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 - **Verifying `sainsburys_add_to_basket` against the real, logged-in site.**
   The session-context *mechanism* - `scripts/sainsburys_login.py`,
   `browser_page(storage_state=...)`, `Settings.sainsburys_storage_state_path` -
-  is written and tested against a fake page. The action's own locators are
-  not: nobody has run `scripts/sainsburys_login.py` with real credentials yet,
-  so `add_to_basket` has never been driven against the real, authenticated
-  page. `DEFAULT_PRODUCT_URL` in particular is a guessed URL, not a verified
-  one.
+  is written and tested against a fake page, and its own selectors (login
+  path, consent copy, MFA domain) come from a real recording, so they're
+  believed correct. `add_to_basket`'s own selectors are drawn from that same
+  recording, but nobody has actually run `scripts/sainsburys_login.py` with
+  real credentials and then `add_to_basket` against the resulting session -
+  so "believed correct" is as far as this goes without that run.
 - **Encrypting the captured session at rest.** `sainsburys_login.py` writes
   the `storage_state` file with owner-only permissions, but it's still a
   plaintext file on disk holding a working login - see

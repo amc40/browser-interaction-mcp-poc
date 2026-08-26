@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser_interaction_mcp import sainsburys
 
@@ -31,6 +32,11 @@ class FakeLocator:
     text: str = ""
     clicked: bool = False
     click_count: int = 0
+    raises_on_wait: bool = False
+    filled: str | None = None
+    pressed_keys: list[str] = field(default_factory=list)
+    heading: FakeLocator | None = None
+    add_button: FakeLocator | None = None
 
     @property
     def first(self) -> FakeLocator:
@@ -47,13 +53,35 @@ class FakeLocator:
         self.clicked = True
         self.click_count += 1
 
+    def fill(self, value: str) -> None:
+        """Record what was typed into this locator, as a search box."""
+        self.filled = value
+
+    def press(self, key: str) -> None:
+        """Record a key pressed on this locator, as a search box."""
+        self.pressed_keys.append(key)
+
     def inner_text(self) -> str:
         """Return the pre-wired text content."""
         return self.text
 
     def wait_for(self, *, state: str, timeout: int | None = None) -> None:
-        """No-op: the fake page is always "ready" as soon as it's built."""
+        """No-op, unless wired to simulate a real Playwright timeout."""
         del state, timeout
+        if self.raises_on_wait:
+            msg = "Timeout waiting for locator"
+            raise PlaywrightTimeoutError(msg)
+
+    def get_by_role(self, role: str, *, name: object = None) -> FakeLocator:
+        """Return this tile's product-name heading."""
+        del name
+        assert role == "heading", f"unexpected role {role!r}"
+        return self.heading if self.heading is not None else FakeLocator(count_=0)
+
+    def get_by_test_id(self, test_id: str) -> FakeLocator:
+        """Return this tile's "add" control."""
+        assert test_id == sainsburys._ADD_BUTTON_TEST_ID, f"unexpected id {test_id!r}"
+        return self.add_button if self.add_button is not None else FakeLocator(count_=0)
 
 
 @dataclass
@@ -62,13 +90,14 @@ class FakePage:
 
     headings: list[FakeLocator] = field(default_factory=list)
     cookie_button: FakeLocator = field(default_factory=lambda: FakeLocator(count_=0))
-    product_name_heading: FakeLocator = field(
-        default_factory=lambda: FakeLocator(text="A Product")
+    search_box: FakeLocator = field(default_factory=FakeLocator)
+    product_tile: FakeLocator = field(
+        default_factory=lambda: FakeLocator(
+            heading=FakeLocator(text="A Product"),
+            add_button=FakeLocator(count_=1),
+        )
     )
-    add_to_basket_button: FakeLocator = field(
-        default_factory=lambda: FakeLocator(count_=1)
-    )
-    url: str = "https://www.sainsburys.co.uk/gol-ui/product/whatever"
+    url: str = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
     goto_calls: list[str] = field(default_factory=list)
 
     def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
@@ -83,24 +112,25 @@ class FakePage:
         self.goto_calls.append(url)
 
     def get_by_role(
-        self, role: str, *, name: object = None, level: int | None = None
+        self, role: str, *, name: object = None
     ) -> FakeLocator | _HeadingsLocator:
-        """Return the matching button or heading locator.
-
-        Buttons are told apart by which name pattern is asked for, exactly as
-        the real page tells "accept cookies" and "add to basket" apart - only
-        here it's identity, not text matching.
-        """
+        """Return the matching button, combobox, or heading locator."""
+        del name
         if role == "button":
-            if name is sainsburys._ADD_TO_BASKET_NAME:
-                return self.add_to_basket_button
             return self.cookie_button
+        if role == "combobox":
+            return self.search_box
         if role == "heading":
-            if level is not None:
-                return self.product_name_heading
             return _HeadingsLocator(self.headings)
         msg = f"unexpected role {role!r}"
         raise AssertionError(msg)
+
+    def locator(self, selector: str) -> FakeLocator:
+        """Return the product tile, for the `product-tile-*` selector."""
+        assert selector == sainsburys._PRODUCT_TILE_SELECTOR, (
+            f"unexpected selector {selector!r}"
+        )
+        return self.product_tile
 
 
 @dataclass
@@ -252,23 +282,30 @@ def test_skips_a_heading_with_no_text(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # add_to_basket
 # ---------------------------------------------------------------------------
-def test_add_to_basket_clicks_add_and_returns_the_product_name(
+def test_add_to_basket_searches_and_returns_the_first_results_product_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(product_name_heading=FakeLocator(text=" Chocolate Digestives "))
+    page = FakePage(
+        product_tile=FakeLocator(
+            heading=FakeLocator(text=" Fairy Lemon Washing Up Liquid "),
+            add_button=FakeLocator(count_=1),
+        )
+    )
     _wire(monkeypatch, page)
 
     result = sainsburys.add_to_basket(
-        "https://www.sainsburys.co.uk/gol-ui/product/example",
-        storage_state_path=Path("session.json"),
+        "washing up liquid", storage_state_path=Path("session.json")
     )
 
-    assert result == "Chocolate Digestives"
-    assert page.add_to_basket_button.clicked
-    assert page.goto_calls == ["https://www.sainsburys.co.uk/gol-ui/product/example"]
+    assert result == "Fairy Lemon Washing Up Liquid"
+    assert page.goto_calls == [sainsburys.MY_ACCOUNT_URL]
+    assert page.search_box.filled == "washing up liquid"
+    assert page.search_box.pressed_keys == ["Enter"]
+    assert page.product_tile.add_button is not None
+    assert page.product_tile.add_button.clicked
 
 
-def test_add_to_basket_uses_the_default_product_when_no_url_is_given(
+def test_add_to_basket_uses_the_default_query_when_none_is_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     page = FakePage()
@@ -276,7 +313,7 @@ def test_add_to_basket_uses_the_default_product_when_no_url_is_given(
 
     sainsburys.add_to_basket(storage_state_path=Path("session.json"))
 
-    assert page.goto_calls == [sainsburys.DEFAULT_PRODUCT_URL]
+    assert page.search_box.filled == sainsburys.DEFAULT_SEARCH_QUERY
 
 
 def test_add_to_basket_passes_the_storage_state_path_to_browser_page(
@@ -299,7 +336,8 @@ def test_add_to_basket_clicks_add_once_per_unit_of_quantity(
 
     sainsburys.add_to_basket(storage_state_path=Path("session.json"), quantity=3)
 
-    assert page.add_to_basket_button.click_count == 3
+    assert page.product_tile.add_button is not None
+    assert page.product_tile.add_button.click_count == 3
 
 
 def test_add_to_basket_dismisses_a_cookie_banner_when_present(
@@ -316,20 +354,37 @@ def test_add_to_basket_dismisses_a_cookie_banner_when_present(
 def test_add_to_basket_raises_when_redirected_to_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(url="https://www.sainsburys.co.uk/gol-ui/login?returnUrl=%2F")
+    page = FakePage(url="https://www.sainsburys.co.uk/gol-ui/oauth/login?returnUrl=%2F")
     _wire(monkeypatch, page)
 
     with pytest.raises(sainsburys.NotLoggedInError, match=r"sainsburys_login\.py"):
         sainsburys.add_to_basket(storage_state_path=Path("session.json"))
 
-    assert not page.add_to_basket_button.clicked
+    assert not page.search_box.filled
 
 
-def test_add_to_basket_raises_when_no_add_button_is_found(
+def test_add_to_basket_raises_when_no_results_are_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(add_to_basket_button=FakeLocator(count_=0))
+    page = FakePage(product_tile=FakeLocator(count_=0, raises_on_wait=True))
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match="Add to basket"):
+    with pytest.raises(RuntimeError, match="No search results"):
+        sainsburys.add_to_basket(
+            "a nonexistent product", storage_state_path=Path("session.json")
+        )
+
+
+def test_add_to_basket_raises_when_the_result_has_no_add_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tile=FakeLocator(
+            heading=FakeLocator(text="A Product"),
+            add_button=FakeLocator(count_=0),
+        )
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match='"add" control'):
         sainsburys.add_to_basket(storage_state_path=Path("session.json"))

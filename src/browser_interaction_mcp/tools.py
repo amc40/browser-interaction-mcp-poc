@@ -89,8 +89,14 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
             "openWorldHint": True,
         },
     )
-    def sainsburys_add_to_basket() -> AddedToBasket:
-        """Add one of a fixed demo product to the Sainsbury's basket.
+    def sainsburys_add_to_basket(
+        query: str = sainsburys.DEFAULT_SEARCH_QUERY,
+    ) -> AddedToBasket:
+        """Search Sainsbury's and add the first result to the basket.
+
+        `query` is only ever typed into Sainsbury's own site search, exactly
+        as a person would - it cannot reach a page, selector or script this
+        server hasn't approved in code.
 
         Needs an already-authenticated Sainsbury's session: run
         `scripts/sainsburys_login.py` locally to log in by hand and capture
@@ -99,7 +105,8 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         session captured that way. Raises if that has not been set up, or if
         the saved session is no longer accepted.
 
-        Unverified against the real site - see `sainsburys.py`'s docstring.
+        Still unverified end to end against a real, authenticated session -
+        see `sainsburys.py`'s docstring.
         """
         storage_state_path = settings.sainsburys_storage_state_path
         if storage_state_path is None:
@@ -111,5 +118,5 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
             )
             raise sainsburys.NotLoggedInError(msg)
 
-        product = sainsburys.add_to_basket(storage_state_path=storage_state_path)
+        product = sainsburys.add_to_basket(query, storage_state_path=storage_state_path)
         return AddedToBasket(product=product)

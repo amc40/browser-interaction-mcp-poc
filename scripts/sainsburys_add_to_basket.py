@@ -4,16 +4,14 @@
 Run this to validate the action for real, once a session exists - the logic
 itself lives in `src/browser_interaction_mcp/sainsburys.py`, registered as
 the `sainsburys_add_to_basket` MCP tool, so this script exercises exactly
-what the server would run. It is unverified against the real page: expect to
-fix locators in `sainsburys.py` after running this, the way
-`sainsburys_products_we_love.py` was used for `products_we_love`.
+what the server would run.
 
 Needs a captured session first - run `scripts/sainsburys_login.py` (with your
 own credentials, never in an automated environment) and pass its output path
 here.
 
 Usage:
-    uv run scripts/sainsburys_add_to_basket.py <storage-state-path> [product-url]
+    uv run scripts/sainsburys_add_to_basket.py <storage-state-path> [search-query]
 """
 
 from __future__ import annotations
@@ -27,16 +25,16 @@ from browser_interaction_mcp.sainsburys import add_to_basket
 def main(argv: list[str]) -> int:
     if not argv:
         print(
-            "Usage: sainsburys_add_to_basket.py <storage-state-path> [product-url]",
+            "Usage: sainsburys_add_to_basket.py <storage-state-path> [search-query]",
             file=sys.stderr,
         )
         return 2
 
     storage_state_path = Path(argv[0])
-    url_args = argv[1:2]
+    query_args = argv[1:2]
 
     try:
-        product = add_to_basket(*url_args, storage_state_path=storage_state_path)
+        product = add_to_basket(*query_args, storage_state_path=storage_state_path)
     except Exception as exc:  # noqa: BLE001 - top-level script, report and exit
         print(f"Failed: {exc}", file=sys.stderr)
         return 1
