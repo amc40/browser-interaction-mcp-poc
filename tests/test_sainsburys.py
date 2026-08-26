@@ -11,6 +11,7 @@ that for real.
 from __future__ import annotations
 
 import contextlib
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -85,6 +86,23 @@ class FakeLocator:
 
 
 @dataclass
+class FakeBrowserContext:
+    """Stands in for `page.context`: `refresh_session`'s only use of it."""
+
+    storage_state_calls: list[object] = field(default_factory=list)
+
+    def storage_state(self, *, path: Path) -> None:
+        """Record where the session was asked to be saved, and write it.
+
+        Actually creates the file - a placeholder, not a real storage_state
+        payload - because `refresh_session` `chmod`s it immediately after,
+        which needs a real file to exist.
+        """
+        self.storage_state_calls.append(path)
+        path.write_text("{}", encoding="utf-8")
+
+
+@dataclass
 class FakePage:
     """A page that only knows the lookups `sainsburys.py` performs."""
 
@@ -97,6 +115,12 @@ class FakePage:
             add_button=FakeLocator(count_=1),
         )
     )
+    username_field: FakeLocator = field(default_factory=FakeLocator)
+    password_field: FakeLocator = field(default_factory=FakeLocator)
+    log_in_button: FakeLocator = field(default_factory=FakeLocator)
+    otp_field: FakeLocator = field(default_factory=FakeLocator)
+    submit_code_button: FakeLocator = field(default_factory=FakeLocator)
+    context: FakeBrowserContext = field(default_factory=FakeBrowserContext)
     url: str = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
     goto_calls: list[str] = field(default_factory=list)
 
@@ -131,6 +155,18 @@ class FakePage:
             f"unexpected selector {selector!r}"
         )
         return self.product_tile
+
+    def get_by_test_id(self, test_id: str) -> FakeLocator:
+        """Return the matching login-form field or button."""
+        by_test_id = {
+            sainsburys._USERNAME_TEST_ID: self.username_field,
+            sainsburys._PASSWORD_TEST_ID: self.password_field,
+            sainsburys._LOG_IN_TEST_ID: self.log_in_button,
+            sainsburys._OTP_TEST_ID: self.otp_field,
+            sainsburys._SUBMIT_CODE_TEST_ID: self.submit_code_button,
+        }
+        assert test_id in by_test_id, f"unexpected id {test_id!r}"
+        return by_test_id[test_id]
 
 
 @dataclass
@@ -388,3 +424,166 @@ def test_add_to_basket_raises_when_the_result_has_no_add_control(
 
     with pytest.raises(RuntimeError, match='"add" control'):
         sainsburys.add_to_basket(storage_state_path=Path("session.json"))
+
+
+# ---------------------------------------------------------------------------
+# refresh_session
+# ---------------------------------------------------------------------------
+def _no_otp() -> str | None:
+    return None
+
+
+def _unreachable_otp() -> str | None:
+    msg = "get_otp should not be called when MFA isn't required"
+    raise AssertionError(msg)
+
+
+def test_refresh_session_fills_and_submits_the_login_form(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    _wire(monkeypatch, page)
+    storage_state_path = tmp_path / "session.json"
+
+    sainsburys.refresh_session(
+        "alan@example.com",
+        "hunter2",
+        storage_state_path=storage_state_path,
+        get_otp=_unreachable_otp,
+    )
+
+    assert page.goto_calls[0] == sainsburys.LOGIN_URL
+    assert page.username_field.filled == "alan@example.com"
+    assert page.password_field.filled == "hunter2"
+    assert page.log_in_button.clicked
+    assert page.context.storage_state_calls == [storage_state_path]
+
+
+def test_refresh_session_restricts_permissions_on_the_saved_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    _wire(monkeypatch, page)
+    storage_state_path = tmp_path / "session.json"
+
+    sainsburys.refresh_session(
+        "alan@example.com",
+        "hunter2",
+        storage_state_path=storage_state_path,
+        get_otp=_unreachable_otp,
+    )
+
+    mode = storage_state_path.stat().st_mode
+    assert stat.S_IMODE(mode) == stat.S_IRUSR | stat.S_IWUSR
+
+
+def test_refresh_session_does_not_ask_for_an_otp_when_not_redirected_to_mfa(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()  # default url has no MFA path
+    _wire(monkeypatch, page)
+
+    sainsburys.refresh_session(
+        "alan@example.com",
+        "hunter2",
+        storage_state_path=tmp_path / "session.json",
+        get_otp=_unreachable_otp,
+    )
+
+    assert not page.otp_field.filled
+    assert not page.submit_code_button.clicked
+
+
+def test_refresh_session_submits_the_otp_when_redirected_to_mfa(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(url="https://account.sainsburys.co.uk/gol/login/mfa")
+    _wire(monkeypatch, page)
+    storage_state_path = tmp_path / "session.json"
+
+    sainsburys.refresh_session(
+        "alan@example.com",
+        "hunter2",
+        storage_state_path=storage_state_path,
+        get_otp=lambda: "123456",
+    )
+
+    assert page.otp_field.filled == "123456"
+    assert page.submit_code_button.clicked
+    assert page.context.storage_state_calls == [storage_state_path]
+
+
+def test_refresh_session_raises_when_mfa_is_required_and_no_otp_is_given(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(url="https://account.sainsburys.co.uk/gol/login/mfa")
+    _wire(monkeypatch, page)
+
+    with pytest.raises(sainsburys.NotLoggedInError, match="verification code"):
+        sainsburys.refresh_session(
+            "alan@example.com",
+            "hunter2",
+            storage_state_path=tmp_path / "session.json",
+            get_otp=_no_otp,
+        )
+
+    assert not page.otp_field.filled
+    assert page.context.storage_state_calls == []
+
+
+def test_refresh_session_raises_when_still_not_logged_in_afterwards(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(url="https://www.sainsburys.co.uk/gol-ui/oauth/login?returnUrl=%2F")
+    _wire(monkeypatch, page)
+
+    with pytest.raises(sainsburys.NotLoggedInError, match="check the password"):
+        sainsburys.refresh_session(
+            "alan@example.com",
+            "wrong-password",
+            storage_state_path=tmp_path / "session.json",
+            get_otp=_no_otp,
+        )
+
+    assert page.context.storage_state_calls == []
+
+
+def test_refresh_session_dismisses_cookie_banners(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(cookie_button=FakeLocator(count_=1))
+    _wire(monkeypatch, page)
+
+    sainsburys.refresh_session(
+        "alan@example.com",
+        "hunter2",
+        storage_state_path=tmp_path / "session.json",
+        get_otp=_unreachable_otp,
+    )
+
+    assert page.cookie_button.clicked
+
+
+def test_refresh_session_opens_a_headed_session_with_no_prior_storage_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    storage_states: list[object] = []
+    _wire(monkeypatch, page, storage_states=storage_states)
+
+    sainsburys.refresh_session(
+        "alan@example.com",
+        "hunter2",
+        storage_state_path=tmp_path / "session.json",
+        get_otp=_unreachable_otp,
+    )
+
+    assert storage_states == [None]

@@ -1,19 +1,39 @@
 """Browser actions against the Sainsbury's groceries site.
 
-Most of this module (`products_we_love`) reads the public homepage: no login
-is needed, and nothing there touches the operator's own session or
-credentials. `add_to_basket` is the exception - adding an item to a basket
-that persists needs to be logged in as somebody, and this project's answer to
-"as whom" is deliberately narrow: never the operator's password.
-`add_to_basket` only ever *reuses* a session captured ahead of time by
-`scripts/sainsburys_login.py`, which the operator runs locally, logs in by
-hand, and which then hands Playwright's `storage_state` - cookies and local
-storage - to `browser.browser_page`. The server never sees a password, an
-OTP, or anything it could be tricked into typing into a phishing page; it can
-only replay a session someone else already established. See
-`browser.browser_page`'s docstring for the mechanism and
-`docs/deployment.md` §7 for why that captured session is worth protecting as
+Most of this module (`products_we_love`, `add_to_basket`) never touches a
+password: they either read a public page, or *reuse* a session someone else
+already established, via Playwright's `storage_state` - cookies and local
+storage, not credentials - handed to `browser.browser_page`. See
+`browser.browser_page`'s docstring for that mechanism and
+`docs/deployment.md` §7 for why the captured session is worth protecting as
 carefully as the credentials it stands in for.
+
+`refresh_session` is the one function in this module that is the exception,
+on purpose: something has to actually log in to produce that session in the
+first place. It drives Sainsbury's real login form directly, so it is the one
+place in this project a password (and, if asked for, an MFA code) passes
+through server code - transiently, for the seconds this call takes, never
+written to disk or logged (a `SecretStr` `username` setting means
+`redaction.py` scrubs it from logs and errors the same as every other
+credential; the same is true of `password` here, passed as a plain string
+because it never becomes settings, but treated with the same care). Two
+things call it, for two different situations:
+
+- `scripts/sainsburys_login.py`, run locally, by hand, when the operator has
+  a machine to run it from. Password and any OTP are read from the terminal
+  (`getpass`, never echoed) and passed straight through.
+- The `sainsburys_refresh_session` MCP tool, for when they don't - a
+  Raspberry Pi behind a tunnel is the documented deployment target, and
+  "SSH in and run a script" isn't assumed to be routinely available there.
+  The tool gets the password (and OTP, if needed) via MCP *elicitation*
+  (`Context.elicit`) instead of a plain tool argument, specifically so the
+  value goes straight from the connecting client to the server and never
+  becomes part of the model's own context or transcript. See `tools.py`.
+
+Both are a real, deliberate narrowing of the "the server never sees a
+password" property `add_to_basket` and `products_we_love` still hold —
+accepted here because the alternative, for an operator without routine host
+access, is no way to refresh a session at all.
 
 **`add_to_basket` itself is still unverified against the real, authenticated
 site** - see the "Not done yet" section of the README - but its selectors are
@@ -55,6 +75,7 @@ Two things learned there that aren't obvious from the site alone:
 from __future__ import annotations
 
 import re
+import stat
 from typing import TYPE_CHECKING
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -62,6 +83,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from browser_interaction_mcp.browser import browser_page
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from playwright.sync_api import Locator, Page
@@ -92,6 +114,19 @@ _NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE
 # Checked by path only, not the full URL, since query strings there commonly
 # carry a return-to address.
 _LOGIN_PATH = "/gol-ui/oauth/login"
+LOGIN_URL = f"https://www.sainsburys.co.uk{_LOGIN_PATH}"
+
+# MFA, when Sainsbury's asks for it, happens on a different domain entirely -
+# also from the real recording, and also not guaranteed to appear (it seems
+# to depend on whether the device/network is already trusted).
+_MFA_PATH = "/gol/login/mfa"
+
+# Login form field test ids, from the same recording.
+_USERNAME_TEST_ID = "username"
+_PASSWORD_TEST_ID = "password"  # noqa: S105 - a DOM test id, not a credential
+_LOG_IN_TEST_ID = "log-in"
+_OTP_TEST_ID = "OTP_FIELD"
+_SUBMIT_CODE_TEST_ID = "submit-code"
 
 # Accessible name of the site search box, from the same recording. Matched by
 # prefix since the trailing "...or tab to ..." reads like a hint that could
@@ -216,8 +251,9 @@ def _check_logged_in(page: Page) -> None:
         msg = (
             "Redirected to the Sainsbury's login page: the saved session is "
             "missing or no longer accepted. Run scripts/sainsburys_login.py "
-            "locally to log in by hand and capture a fresh one - see "
-            "browser.browser_page's docstring for how it's used from there."
+            "locally, or call sainsburys_refresh_session, to log in and "
+            "capture a fresh one - see browser.browser_page's docstring for "
+            "how it's used from there."
         )
         raise NotLoggedInError(msg)
 
@@ -287,3 +323,71 @@ def add_to_basket(
             add_button.click(timeout=15_000)
 
         return product_name
+
+
+def refresh_session(
+    username: str,
+    password: str,
+    *,
+    storage_state_path: Path,
+    get_otp: Callable[[], str | None],
+) -> None:
+    """Log in for real, and overwrite ``storage_state_path`` with the result.
+
+    The one function in this module that handles a password - see the module
+    docstring for what that means and why it's accepted here. Neither
+    `username` nor `password` is written anywhere by this function or
+    anything it calls; only the resulting session is.
+
+    Args:
+        username: Sainsbury's account email/username, typed into the login
+            form exactly as a person would.
+        password: Account password, typed into the login form.
+        storage_state_path: Where to write the resulting Playwright
+            `storage_state` JSON. Overwritten if it already exists.
+        get_otp: Called only if Sainsbury's redirects to its MFA step -
+            not guaranteed to happen, see the module docstring. Should
+            return the verification code to submit, or `None` if the
+            operator declined or none was available; either way, `None`
+            aborts the refresh rather than submitting an empty code.
+
+    Raises:
+        NotLoggedInError: If MFA was required but `get_otp` returned `None`,
+            or if the session still isn't authenticated after everything
+            above - most likely a wrong password.
+    """
+    with browser_page(headless=False) as page:
+        page.goto(LOGIN_URL, wait_until="load", timeout=30_000)
+        _dismiss_cookie_banner(page)
+
+        page.get_by_test_id(_USERNAME_TEST_ID).fill(username)
+        page.get_by_test_id(_PASSWORD_TEST_ID).fill(password)
+        page.get_by_test_id(_LOG_IN_TEST_ID).click(timeout=15_000)
+
+        if _MFA_PATH in page.url:
+            otp = get_otp()
+            if otp is None:
+                msg = (
+                    "Sainsbury's asked for a verification code, and none was "
+                    "provided - not completing the login."
+                )
+                raise NotLoggedInError(msg)
+            page.get_by_test_id(_OTP_TEST_ID).fill(otp)
+            page.get_by_test_id(_SUBMIT_CODE_TEST_ID).click(timeout=15_000)
+
+        page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=30_000)
+        _dismiss_cookie_banner(page)
+        if _LOGIN_PATH in page.url:
+            msg = (
+                "Still not logged in after submitting the login form (and "
+                "any verification code) - check the password is correct."
+            )
+            raise NotLoggedInError(msg)
+
+        page.context.storage_state(path=storage_state_path)
+
+    # rw for the owner only: this file is as sensitive as the login that
+    # produced it. Done here, not by each caller, so both
+    # scripts/sainsburys_login.py and the sainsburys_refresh_session tool get
+    # it for free.
+    storage_state_path.chmod(stat.S_IRUSR | stat.S_IWUSR)

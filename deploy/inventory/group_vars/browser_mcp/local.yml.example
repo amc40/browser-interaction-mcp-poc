@@ -1,9 +1,9 @@
 ---
-# Copy to local.yml (gitignored, unlike this file) and fill in with the one
-# value in this deployment that's tied to a real person rather than the
-# server: the public hostname of your named Cloudflare tunnel. It isn't a
-# secret exactly — it doesn't grant access to anything on its own — but it's
-# personal enough that it doesn't belong in a public git history either.
+# Copy to local.yml (gitignored, unlike this file) and fill in with values in
+# this deployment that are tied to a real person rather than the server.
+# Neither is a secret exactly — neither grants access to anything on its own
+# — but both are personal enough that they don't belong in a public git
+# history either, encrypted or not.
 #
 #   cp local.yml.example local.yml
 #   $EDITOR local.yml
@@ -11,4 +11,13 @@
 # Ansible merges every file under group_vars/browser_mcp/ automatically, the
 # same way it already merges vars.yml and vault.yml, so nothing else needs to
 # change.
+
+# The public hostname of your named Cloudflare tunnel.
 mcp_public_hostname: mcp.example.com
+
+# Sainsbury's account email/username, typed into the real login form by the
+# sainsburys_refresh_session tool - see sainsburys.py's module docstring and
+# BROWSER_MCP_SAINSBURYS_USERNAME in .env.example. Omit this line entirely
+# (rather than leaving the placeholder) if you haven't set that tool up yet;
+# env.j2 only writes the setting when it's defined.
+mcp_sainsburys_username: you@example.com

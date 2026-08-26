@@ -26,6 +26,7 @@ def test_defaults_are_conservative() -> None:
     assert settings.github_client_id is None
     assert settings.github_client_secret is None
     assert settings.sainsburys_storage_state_path is None
+    assert settings.sainsburys_username is None
 
 
 def test_environment_overrides_defaults(
@@ -56,6 +57,7 @@ def test_environment_overrides_defaults(
         ("BROWSER_MCP_GITHUB_USER_ID", "amc40"),
         ("BROWSER_MCP_GITHUB_TOKEN_CACHE_SECONDS", "-1"),
         ("BROWSER_MCP_GITHUB_CLIENT_ID", ""),
+        ("BROWSER_MCP_SAINSBURYS_USERNAME", ""),
     ],
 )
 def test_invalid_configuration_is_rejected(
@@ -156,6 +158,24 @@ def test_sainsburys_storage_state_path_is_read_from_the_environment(
     settings = Settings()
 
     assert settings.sainsburys_storage_state_path == storage_state_path
+
+
+def test_sainsburys_username_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROWSER_MCP_SAINSBURYS_USERNAME", "alan@example.com")
+
+    settings = Settings()
+
+    assert settings.sainsburys_username is not None
+    assert settings.sainsburys_username.get_secret_value() == "alan@example.com"
+
+
+def test_sainsburys_username_is_not_printed() -> None:
+    """A SecretStr - not because it grants access alone, but for redaction.py."""
+    settings = Settings(sainsburys_username=SecretStr("alan+mcp@example.com"))
+
+    assert "alan+mcp" not in repr(settings)
 
 
 def test_the_client_secret_is_not_printed() -> None:

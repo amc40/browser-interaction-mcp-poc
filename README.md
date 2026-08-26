@@ -35,6 +35,25 @@ replays an already-authenticated session instead of ever performing a login.
 See `browser.py`'s and `sainsburys.py`'s docstrings, and
 `Settings.sainsburys_storage_state_path`.
 
+That script assumes the operator can run it: a real terminal, a real
+browser window, to type real credentials into. That won't be true here -
+the [documented deployment target](#status) is a Raspberry Pi behind a
+tunnel, reached without routine shell access. A third tool,
+`sainsburys_refresh_session`, is the answer for that case: it drives
+Sainsbury's real login form itself, asking for the password (and an MFA
+code, if Sainsbury's asks for one) through *MCP elicitation*
+(`Context.elicit`) rather than a tool argument, so the value goes straight
+from the connecting client to the server and never becomes part of the
+model's own context or conversation. This is a real, deliberate narrowing
+of "the server never sees a password" - accepted because the alternative,
+without routine host access, is no way to refresh a session at all. See
+`sainsburys.refresh_session`'s and the tool's own docstrings for the full
+reasoning, and
+[`deploy/inventory/group_vars/browser_mcp/local.yml.example`](deploy/inventory/group_vars/browser_mcp/local.yml.example)
+for how the one supporting setting this needs
+(`BROWSER_MCP_SAINSBURYS_USERNAME`) reaches the Pi without ever being
+committed - the same problem `mcp_public_hostname` already solved there.
+
 Its selectors aren't guesses: they were taken from a real Playwright codegen
 recording of a manual login and search-and-add flow, which also corrected
 several assumptions the login flow's own design had made from the public
@@ -246,17 +265,24 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 - **Authentication on stdio**, which cannot carry credentials at all. The http
   transport binds to loopback by default for the same reason. See
   [SDR 0001](docs/sdr/0001-github-authentication.md).
-- **Verifying `sainsburys_add_to_basket` against the real, logged-in site.**
-  The session-context *mechanism* - `scripts/sainsburys_login.py`,
-  `browser_page(storage_state=...)`, `Settings.sainsburys_storage_state_path` -
-  is written and tested against a fake page, and its own selectors (login
-  path, consent copy, MFA domain) come from a real recording, so they're
-  believed correct. `add_to_basket`'s own selectors are drawn from that same
-  recording, but nobody has actually run `scripts/sainsburys_login.py` with
-  real credentials and then `add_to_basket` against the resulting session -
-  so "believed correct" is as far as this goes without that run.
-- **Encrypting the captured session at rest.** `sainsburys_login.py` writes
-  the `storage_state` file with owner-only permissions, but it's still a
-  plaintext file on disk holding a working login - see
-  [`docs/deployment.md`](docs/deployment.md) §7, which already flags this as
-  the actual thing worth stealing once a browser action drives one.
+- **Verifying `sainsburys_add_to_basket` and `sainsburys_refresh_session`
+  against the real, logged-in site.** Both are written and tested against a
+  fake page, and their selectors (login path, consent copy, MFA domain,
+  login-form field ids, search box, result-tile add control) come from a
+  real recording, so they're believed correct. But nobody has actually run
+  either against the real site: not `scripts/sainsburys_login.py` with real
+  credentials, not `sainsburys_refresh_session` through a real MCP client
+  that supports elicitation, and not `add_to_basket` against a session
+  either of those produced. "Believed correct" is as far as this goes
+  without that run.
+- **Confirming a real MCP client actually supports elicitation.**
+  `sainsburys_refresh_session`'s design depends on it - see its own
+  docstring - and this was verified against `fastmcp`'s own test `Client`
+  (which does), not against whatever client this server is actually served
+  through day to day.
+- **Encrypting the captured session at rest.** `sainsburys_login.py` and
+  `sainsburys_refresh_session` both write the `storage_state` file with
+  owner-only permissions, but it's still a plaintext file on disk holding a
+  working login - see [`docs/deployment.md`](docs/deployment.md) §7, which
+  already flags this as the actual thing worth stealing once a browser
+  action drives one.
