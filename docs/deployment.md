@@ -103,11 +103,14 @@ accounts — not a partial one.
 
 ## 7. Protect the browser profile at rest
 
-Once `tools.py` drives a real browser, the host stores live authenticated
-sessions for third-party services — the actual thing worth stealing, and worth
-more than the GitHub token that guards it. Encrypt the profile at rest, keep the
-sessions scoped as narrowly as each service permits, and have a tested way to
-revoke them all quickly.
+Now that `sainsburys.add_to_basket` drives a real, logged-in browser, the host
+stores a live authenticated session for a third-party service in the file
+`scripts/sainsburys_login.py` writes — the actual thing worth stealing, and
+worth more than the GitHub token that guards it. Owner-only file permissions
+(what the script does today) are not encryption at rest. Encrypt the file,
+keep the session scoped as narrowly as Sainsbury's permits, and have a tested
+way to revoke it quickly — signing out on Sainsbury's, or just deleting the
+file and rerunning the login script.
 
 ## 8. Log who did what
 

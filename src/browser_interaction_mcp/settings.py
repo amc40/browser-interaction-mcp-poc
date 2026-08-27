@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path  # noqa: TC003 - pydantic resolves field types at runtime
 from typing import Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
@@ -100,6 +101,30 @@ class Settings(BaseSettings):
         description="Public base URL the OAuth callback is reachable at, which "
         "must match the GitHub OAuth app's callback. Defaults to the bind "
         "address, which is right when the client runs on this machine.",
+    )
+
+    sainsburys_storage_state_path: Path | None = Field(
+        default=None,
+        description="Path to a Playwright storage_state JSON file holding a "
+        "logged-in Sainsbury's session - cookies and local storage, not a "
+        "password. Written by scripts/sainsburys_login.py (run locally) or "
+        "the sainsburys_refresh_session tool (run remotely, e.g. on a host "
+        "the operator doesn't have routine shell access to); actions that "
+        "need to be logged in refuse to run without it. Never commit this "
+        "file - treat it like the credentials it stands in for.",
+    )
+    sainsburys_username: SecretStr | None = Field(
+        default=None,
+        min_length=1,
+        description="Sainsbury's account email/username. Required by the "
+        "sainsburys_refresh_session tool, which types it into the real login "
+        "form; not required for anything that only reads "
+        "sainsburys_storage_state_path. A SecretStr - not because a username "
+        "grants access on its own, but so redaction.py covers it "
+        "automatically like every other credential. Personal enough that it "
+        "shouldn't go in a public git history even encrypted - see "
+        "deploy/inventory/group_vars/browser_mcp/local.yml.example for how "
+        "the deployment keeps it out.",
     )
 
     @property

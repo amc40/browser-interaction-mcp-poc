@@ -269,3 +269,25 @@ def test_context_is_created_with_the_shared_defaults(
     assert kwargs["user_agent"] == browser.USER_AGENT
     assert kwargs["locale"] == "en-GB"
     assert kwargs["timezone_id"] == "Europe/London"
+
+
+def test_context_has_no_storage_state_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chromium = _wire(monkeypatch)
+
+    with browser.browser_page(headless=True):
+        pass
+
+    assert chromium.browser_to_return.context_kwargs["storage_state"] is None
+
+
+def test_storage_state_is_passed_through_to_the_new_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chromium = _wire(monkeypatch)
+
+    with browser.browser_page(headless=True, storage_state="session.json"):
+        pass
+
+    assert chromium.browser_to_return.context_kwargs["storage_state"] == "session.json"

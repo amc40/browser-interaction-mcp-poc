@@ -17,6 +17,10 @@ htmlcov/
 .env
 *.pem
 
+# Captured browser sessions (scripts/sainsburys_login.py) - as sensitive as
+# the login itself, wherever they end up saved.
+*storage_state*.json
+
 # Ansible
 deploy/collections/
 deploy/inventory/group_vars/*/vault.yml

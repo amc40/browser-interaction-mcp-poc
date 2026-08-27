@@ -7,6 +7,13 @@ fingerprint headless Chromium and block it - see sainsburys.py's module
 docstring for how that was diagnosed - and each action opts into it
 individually, action by action, rather than the server paying the Xvfb cost
 for every call regardless of whether that call needs it.
+
+An action that needs to be logged in to a third-party site takes the same
+session-context approach: rather than the server ever holding a password,
+`browser_page(storage_state=...)` seeds a fresh context with cookies and
+local storage captured from a real, manual login, exactly like restoring a
+saved browser profile. Nothing here creates that file - see
+sainsburys.py's `add_to_basket` and `scripts/sainsburys_login.py`.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from playwright.sync_api import sync_playwright
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
     from typing import Protocol
 
     from playwright.sync_api import Browser, Page, ViewportSize
@@ -52,13 +60,14 @@ _TIMEZONE_ID = "Europe/London"
 _EXTRA_HTTP_HEADERS = {"Accept-Language": "en-GB,en;q=0.9"}
 
 
-def _new_context(browser: Browser) -> Page:
+def _new_context(browser: Browser, *, storage_state: str | Path | None) -> Page:
     context = browser.new_context(
         user_agent=USER_AGENT,
         viewport=_VIEWPORT,
         locale=_LOCALE,
         timezone_id=_TIMEZONE_ID,
         extra_http_headers=_EXTRA_HTTP_HEADERS,
+        storage_state=storage_state,
     )
     return context.new_page()
 
@@ -134,7 +143,11 @@ def _read_display_number(
 
 
 @contextlib.contextmanager
-def browser_page(*, headless: bool) -> Iterator[Page]:
+def browser_page(
+    *,
+    headless: bool,
+    storage_state: str | Path | None = None,
+) -> Iterator[Page]:
     """Open one page in a fresh browser and context, closing both on exit.
 
     Args:
@@ -142,9 +155,16 @@ def browser_page(*, headless: bool) -> Iterator[Page]:
             (runs under a short-lived Xvfb display instead); True otherwise,
             for the lower memory footprint - prefer True unless a specific
             site has already been shown to need otherwise.
+        storage_state: Path to a Playwright `storage_state` JSON file to seed
+            the new context's cookies and local storage from - the session
+            context approach for reusing an already-authenticated login
+            without ever holding the underlying credentials. `None` (the
+            default) opens a fresh, logged-out context, same as before this
+            parameter existed.
 
     Yields:
-        A ready-to-use page, in a fresh, empty browser context.
+        A ready-to-use page, in a fresh browser context - authenticated if
+        `storage_state` was given, empty otherwise.
     """
     with contextlib.ExitStack() as stack:
         launch_env: dict[str, str | float | bool] | None = None
@@ -155,4 +175,4 @@ def browser_page(*, headless: bool) -> Iterator[Page]:
         playwright = stack.enter_context(sync_playwright())
         browser = playwright.chromium.launch(headless=headless, env=launch_env)
         stack.callback(browser.close)
-        yield _new_context(browser)
+        yield _new_context(browser, storage_state=storage_state)

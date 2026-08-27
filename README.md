@@ -19,7 +19,58 @@ Sainsbury's (and Tesco, tested for comparison) run Akamai Bot Manager, which
 blocks *headless* Chromium specifically, regardless of network origin or user
 agent. `browser_interaction_mcp.browser.browser_page(headless=False)` runs a
 real, visible-mode Chromium under a short-lived Xvfb display instead, which
-gets through cleanly - see that module and `sainsburys.py`'s docstrings. See
+gets through cleanly - see that module and `sainsburys.py`'s docstrings.
+
+A second action, `sainsburys_add_to_basket`, needs to act as a logged-in
+account rather than reading a public page, so it takes a different approach
+to authentication than the GitHub OAuth above: the *session context*
+approach. The server never holds a Sainsbury's password. Instead
+`scripts/sainsburys_login.py` is run locally, by hand, by the operator: it
+opens a real browser, the operator logs in themself, and Playwright's
+`storage_state` - the resulting cookies and local storage, not the
+credentials that produced them - is captured to a file.
+`browser_page(storage_state=...)` then seeds a fresh context from that file,
+the same way restoring a saved browser profile would, so the tool call
+replays an already-authenticated session instead of ever performing a login.
+See `browser.py`'s and `sainsburys.py`'s docstrings, and
+`Settings.sainsburys_storage_state_path`.
+
+That script assumes the operator can run it: a real terminal, a real
+browser window, to type real credentials into. That won't be true here -
+the [documented deployment target](#status) is a Raspberry Pi behind a
+tunnel, reached without routine shell access. A third tool,
+`sainsburys_refresh_session`, is the answer for that case: it drives
+Sainsbury's real login form itself, asking for the password (and an MFA
+code, if Sainsbury's asks for one) through *MCP elicitation*
+(`Context.elicit`) rather than a tool argument, so the value goes straight
+from the connecting client to the server and never becomes part of the
+model's own context or conversation. This is a real, deliberate narrowing
+of "the server never sees a password" - accepted because the alternative,
+without routine host access, is no way to refresh a session at all. See
+`sainsburys.refresh_session`'s and the tool's own docstrings for the full
+reasoning, and
+[`deploy/inventory/group_vars/browser_mcp/local.yml.example`](deploy/inventory/group_vars/browser_mcp/local.yml.example)
+for how the one supporting setting this needs
+(`BROWSER_MCP_SAINSBURYS_USERNAME`) reaches the Pi without ever being
+committed - the same problem `mcp_public_hostname` already solved there.
+
+Its selectors aren't guesses: they were taken from a real Playwright codegen
+recording of a manual login and search-and-add flow, which also corrected
+several assumptions the login flow's own design had made from the public
+groceries site alone - the login path (`/gol-ui/oauth/login`), a different
+cookie-consent copy ("Required only"), MFA living on a separate domain
+(`account.sainsburys.co.uk`) and not always appearing, and adding a product
+straight from its search-result tile (`data-testid="add-button"`) rather than
+needing to open the product's own page first. See `sainsburys.py`'s module
+docstring for the detail.
+
+**`sainsburys_add_to_basket` is still unverified end to end.** Its selectors
+are drawn from a real recording rather than invented, but nobody has run it
+against a real, authenticated session yet - that needs credentials this
+project does not have and should not be given inside an automated session,
+see `scripts/sainsburys_login.py`'s own docstring for why.
+`scripts/sainsburys_add_to_basket.py` exists for whoever has those
+credentials to run it for real and fix whatever still doesn't match. See
 [Not done yet](#not-done-yet).
 
 It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
@@ -134,6 +185,8 @@ fact that shell access on the host bypasses all of this.
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
 | `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
+| `scripts/sainsburys_login.py` | Run locally, by hand, with your own credentials: logs in to Sainsbury's for real and captures the session `add_to_basket` replays |
+| `scripts/sainsburys_add_to_basket.py` | CLI wrapper to run `sainsburys_add_to_basket` directly, for validating it against the real page once a session exists |
 
 ### Adding a browser action
 
@@ -212,4 +265,24 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 - **Authentication on stdio**, which cannot carry credentials at all. The http
   transport binds to loopback by default for the same reason. See
   [SDR 0001](docs/sdr/0001-github-authentication.md).
-- **Persistent credential storage** for the service being automated.
+- **Verifying `sainsburys_add_to_basket` and `sainsburys_refresh_session`
+  against the real, logged-in site.** Both are written and tested against a
+  fake page, and their selectors (login path, consent copy, MFA domain,
+  login-form field ids, search box, result-tile add control) come from a
+  real recording, so they're believed correct. But nobody has actually run
+  either against the real site: not `scripts/sainsburys_login.py` with real
+  credentials, not `sainsburys_refresh_session` through a real MCP client
+  that supports elicitation, and not `add_to_basket` against a session
+  either of those produced. "Believed correct" is as far as this goes
+  without that run.
+- **Confirming a real MCP client actually supports elicitation.**
+  `sainsburys_refresh_session`'s design depends on it - see its own
+  docstring - and this was verified against `fastmcp`'s own test `Client`
+  (which does), not against whatever client this server is actually served
+  through day to day.
+- **Encrypting the captured session at rest.** `sainsburys_login.py` and
+  `sainsburys_refresh_session` both write the `storage_state` file with
+  owner-only permissions, but it's still a plaintext file on disk holding a
+  working login - see [`docs/deployment.md`](docs/deployment.md) §7, which
+  already flags this as the actual thing worth stealing once a browser
+  action drives one.

@@ -101,6 +101,19 @@ mcp_github_token_cache_seconds: 60
 # testing this string, not by reading forwarded headers.
 mcp_oauth_base_url: "https://{{ mcp_public_hostname }}"
 
+# --- Sainsbury's session ----------------------------------------------------
+# Where sainsburys_refresh_session (or scripts/sainsburys_login.py, run here
+# by hand) writes the captured session, and where add_to_basket reads it
+# back from. Just a path under the existing state dir - not personal, not
+# secret - so it's fine to track here, unlike the account username below.
+mcp_sainsburys_storage_state_path: "{{ mcp_state_dir }}/sainsburys_storage_state.json"
+#
+# mcp_sainsburys_username itself is NOT set here, same reasoning as
+# mcp_public_hostname above: it's tied to one person, and this file is
+# tracked in git. Set it in local.yml instead - see local.yml.example. Left
+# undefined here (rather than empty) so env.j2 can tell "not configured yet"
+# apart from "configured as empty".
+
 # --- Secrets, from vault.yml ----------------------------------------------
 mcp_github_client_id: "{{ vault_mcp_github_client_id }}"
 mcp_github_client_secret: "{{ vault_mcp_github_client_secret }}"
