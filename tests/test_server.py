@@ -30,6 +30,7 @@ async def test_server_exposes_only_registered_tools(
         "sainsburys_products_we_love",
         "sainsburys_search",
         "sainsburys_add_to_basket",
+        "sainsburys_order_history",
     ]
 
 
@@ -199,6 +200,63 @@ async def test_sainsburys_add_to_basket_refuses_when_the_session_file_is_missing
             await client.call_tool(
                 "sainsburys_add_to_basket", {"product_name": "Anything"}
             )
+
+
+async def test_sainsburys_order_history_wires_to_the_browser_action(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticate: Authenticate,
+    tmp_path: Path,
+) -> None:
+    """Only checks the wiring - test_sainsburys.py covers the scraping itself."""
+    authenticate()
+    storage_state_path = tmp_path / "session.json"
+    storage_state_path.write_text("{}", encoding="utf-8")
+    settings = Settings(sainsburys_storage_state_path=storage_state_path)
+    seen_calls: list[tuple[Path, int]] = []
+
+    def fake_order_history(
+        *, storage_state_path: Path, max_orders: int
+    ) -> list[sainsburys.OrderHistoryItem]:
+        seen_calls.append((storage_state_path, max_orders))
+        return [
+            sainsburys.OrderHistoryItem(
+                name="Fairy Lemon Washing Up Liquid",
+                price_paid="£1.85",
+                quantity=2,
+                order_date="12 August 2026",
+            ),
+            sainsburys.OrderHistoryItem(
+                name="Unpriced Product",
+                price_paid=None,
+                quantity=None,
+                order_date=None,
+            ),
+        ]
+
+    monkeypatch.setattr(sainsburys, "order_history", fake_order_history)
+
+    async with Client(build_server(settings)) as client:
+        result = await client.call_tool("sainsburys_order_history", {"max_orders": 3})
+
+    assert [
+        (item.name, item.price_paid, item.quantity, item.order_date)
+        for item in result.data.items
+    ] == [
+        ("Fairy Lemon Washing Up Liquid", "£1.85", 2, "12 August 2026"),
+        ("Unpriced Product", None, None, None),
+    ]
+    assert seen_calls == [(storage_state_path, 3)]
+
+
+async def test_sainsburys_order_history_refuses_without_a_saved_session(
+    authenticate: Authenticate,
+) -> None:
+    authenticate()
+    settings = Settings(sainsburys_storage_state_path=None, include_error_details=True)
+
+    async with Client(build_server(settings)) as client:
+        with pytest.raises(ToolError, match=r"sainsburys_login\.py"):
+            await client.call_tool("sainsburys_order_history")
 
 
 async def test_server_is_named_and_documented() -> None:

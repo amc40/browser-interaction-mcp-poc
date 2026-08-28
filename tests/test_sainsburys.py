@@ -46,6 +46,13 @@ class FakeLocator:
     add_button: FakeLocator | None = None
     image_src: str | None = "https://example.invalid/product.jpg"
     has_image: bool = True
+    # order_history-specific: an order tile's date and "view order" control,
+    # and its line-item rows once expanded; a line-item row's price/quantity.
+    date_field: FakeLocator | None = None
+    view_button: FakeLocator | None = None
+    item_rows: list[FakeLocator] = field(default_factory=list)
+    price_field: FakeLocator | None = None
+    quantity_field: FakeLocator | None = None
 
     @property
     def first(self) -> FakeLocator:
@@ -97,14 +104,26 @@ class FakeLocator:
         return self.heading if self.heading is not None else FakeLocator(count_=0)
 
     def get_by_test_id(self, test_id: str) -> FakeLocator:
-        """Return this tile's "add" control."""
-        assert test_id == sainsburys._ADD_BUTTON_TEST_ID, f"unexpected id {test_id!r}"
-        return self.add_button if self.add_button is not None else FakeLocator(count_=0)
+        """Return the matching control on this tile/row."""
+        by_test_id = {
+            sainsburys._ADD_BUTTON_TEST_ID: self.add_button,
+            sainsburys._ORDER_DATE_TEST_ID: self.date_field,
+            sainsburys._VIEW_ORDER_TEST_ID: self.view_button,
+            sainsburys._ITEM_PRICE_TEST_ID: self.price_field,
+            sainsburys._ITEM_QUANTITY_TEST_ID: self.quantity_field,
+        }
+        assert test_id in by_test_id, f"unexpected id {test_id!r}"
+        found = by_test_id[test_id]
+        return found if found is not None else FakeLocator(count_=0)
 
-    def locator(self, selector: str) -> FakeLocator:
-        """Return this tile's image, as `<img>`."""
-        assert selector == "img", f"unexpected selector {selector!r}"
-        return self if self.has_image else FakeLocator(count_=0)
+    def locator(self, selector: str) -> FakeLocator | _TilesLocator:
+        """Return this tile's image (`img`) or, for an order, its item rows."""
+        if selector == "img":
+            return self if self.has_image else FakeLocator(count_=0)
+        if selector == sainsburys._ORDER_ITEM_SELECTOR:
+            return _TilesLocator(self.item_rows)
+        msg = f"unexpected selector {selector!r}"
+        raise AssertionError(msg)
 
     def get_attribute(self, name: str) -> str | None:
         """Return this (image) locator's pre-wired `src`."""
@@ -113,8 +132,13 @@ class FakeLocator:
 
 
 @dataclass
-class _ProductTilesLocator:
-    """`page.locator(_PRODUCT_TILE_SELECTOR)`: every result tile, in order."""
+class _TilesLocator:
+    """A resolved `page.locator(...)`/`tile.locator(...)`: every match, in order.
+
+    Shared by product-result tiles, order tiles and order line-item rows -
+    they're all "some list of elements found by a selector" to the code
+    under test.
+    """
 
     tiles: list[FakeLocator]
 
@@ -163,6 +187,7 @@ class FakePage:
             )
         ]
     )
+    order_tiles: list[FakeLocator] = field(default_factory=list)
     username_field: FakeLocator = field(default_factory=FakeLocator)
     password_field: FakeLocator = field(default_factory=FakeLocator)
     log_in_button: FakeLocator = field(default_factory=FakeLocator)
@@ -213,12 +238,14 @@ class FakePage:
         """Return the first result tile, for tests that only care about one."""
         return self.product_tiles[0]
 
-    def locator(self, selector: str) -> _ProductTilesLocator:
+    def locator(self, selector: str) -> _TilesLocator:
         """Return the locator for a CSS selector `sainsburys.py` uses."""
-        assert selector == sainsburys._PRODUCT_TILE_SELECTOR, (
-            f"unexpected selector {selector!r}"
-        )
-        return _ProductTilesLocator(self.product_tiles)
+        tiles_by_selector = {
+            sainsburys._PRODUCT_TILE_SELECTOR: self.product_tiles,
+            sainsburys._ORDER_TILE_SELECTOR: self.order_tiles,
+        }
+        assert selector in tiles_by_selector, f"unexpected selector {selector!r}"
+        return _TilesLocator(tiles_by_selector[selector])
 
     def get_by_test_id(self, test_id: str) -> FakeLocator:
         """Return the matching login-form field or button."""
@@ -937,3 +964,241 @@ def test_refresh_session_opens_a_headed_session_with_no_prior_storage_state(
     )
 
     assert storage_states == [None]
+
+
+# ---------------------------------------------------------------------------
+# order_history
+# ---------------------------------------------------------------------------
+def _order_item_row(
+    name: str,
+    *,
+    price: str | None = "£1.85",
+    quantity: str | None = "Qty: 2",
+) -> FakeLocator:
+    return FakeLocator(
+        heading=FakeLocator(text=name),
+        price_field=FakeLocator(text=price) if price is not None else None,
+        quantity_field=FakeLocator(text=quantity) if quantity is not None else None,
+    )
+
+
+def test_order_history_reads_name_price_quantity_and_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(
+                date_field=FakeLocator(text="12 August 2026"),
+                view_button=FakeLocator(count_=1),
+                item_rows=[_order_item_row("Fairy Lemon Washing Up Liquid")],
+            ),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    items = sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert items == [
+        sainsburys.OrderHistoryItem(
+            name="Fairy Lemon Washing Up Liquid",
+            price_paid="£1.85",
+            quantity=2,
+            order_date="12 August 2026",
+        ),
+    ]
+
+
+def test_order_history_navigates_to_the_order_history_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        order_tiles=[FakeLocator(item_rows=[_order_item_row("A Product")])],
+    )
+    _wire(monkeypatch, page)
+
+    sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert sainsburys.ORDER_HISTORY_URL in page.goto_calls
+
+
+def test_order_history_expands_an_order_with_a_view_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    view_button = FakeLocator(count_=1)
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(
+                view_button=view_button,
+                item_rows=[_order_item_row("A Product")],
+            ),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert view_button.clicked
+
+
+def test_order_history_skips_expanding_when_there_is_no_view_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A page shape where items are already inline - covered by the tile
+    # having no "view order" control at all (count 0).
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(
+                view_button=FakeLocator(count_=0),
+                item_rows=[_order_item_row("A Product")],
+            ),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    items = sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert [item.name for item in items] == ["A Product"]
+
+
+def test_order_history_honours_a_smaller_max_orders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(item_rows=[_order_item_row("First Order Item")]),
+            FakeLocator(item_rows=[_order_item_row("Second Order Item")]),
+            FakeLocator(item_rows=[_order_item_row("Third Order Item")]),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    items = sainsburys.order_history(
+        storage_state_path=Path("session.json"), max_orders=2
+    )
+
+    assert [item.name for item in items] == ["First Order Item", "Second Order Item"]
+
+
+def test_order_history_reports_missing_price_or_quantity_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(
+                item_rows=[
+                    _order_item_row("Unpriced Product", price=None, quantity=None),
+                ],
+            ),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    items = sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert items == [
+        sainsburys.OrderHistoryItem(
+            name="Unpriced Product",
+            price_paid=None,
+            quantity=None,
+            order_date=None,
+        ),
+    ]
+
+
+def test_order_history_reports_missing_date_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(
+                date_field=FakeLocator(count_=0),
+                item_rows=[_order_item_row("A Product")],
+            ),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    items = sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert items[0].order_date is None
+
+
+def test_order_history_skips_a_row_whose_heading_never_appears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unreadable_row = FakeLocator(heading=FakeLocator(raises_on_wait=True))
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(item_rows=[unreadable_row, _order_item_row("Real Product")]),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    items = sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert [item.name for item in items] == ["Real Product"]
+
+
+def test_order_history_skips_a_row_with_a_blank_heading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(
+                item_rows=[_order_item_row("   "), _order_item_row("Real Product")],
+            ),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    items = sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert [item.name for item in items] == ["Real Product"]
+
+
+def test_order_history_raises_when_no_past_orders_are_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(order_tiles=[])
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="No past orders"):
+        sainsburys.order_history(storage_state_path=Path("session.json"))
+
+
+def test_order_history_raises_when_orders_are_present_but_no_item_is_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        order_tiles=[
+            FakeLocator(
+                item_rows=[FakeLocator(heading=FakeLocator(raises_on_wait=True))]
+            ),
+        ],
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="markup has probably changed"):
+        sainsburys.order_history(storage_state_path=Path("session.json"))
+
+
+def test_order_history_raises_when_redirected_to_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(username_field=FakeLocator(visible=True))
+    _wire(monkeypatch, page)
+
+    with pytest.raises(sainsburys.NotLoggedInError, match=r"sainsburys_login\.py"):
+        sainsburys.order_history(storage_state_path=Path("session.json"))
+
+
+def test_order_history_passes_the_storage_state_path_to_browser_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(order_tiles=[FakeLocator(item_rows=[_order_item_row("A Product")])])
+    storage_states: list[object] = []
+    _wire(monkeypatch, page, storage_states=storage_states)
+
+    sainsburys.order_history(storage_state_path=Path("session.json"))
+
+    assert storage_states == [Path("session.json")]

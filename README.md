@@ -89,6 +89,18 @@ see `scripts/sainsburys_login.py`'s own docstring for why.
 credentials to run it for real and fix whatever still doesn't match. See
 [Not done yet](#not-done-yet).
 
+A fourth tool, `sainsburys_order_history`, reads line items - including the
+price paid at the time - from the caller's recent orders, meant as a real
+preference signal for `sainsburys_search` to be weighed against (a brand
+bought repeatedly, a price that's gone up) instead of something guessed or
+invented. Unlike everything above, its selectors have no real recording
+behind them at all yet - no order-history page has been visited for real -
+so they're a best-effort guess modelled on the patterns already confirmed
+elsewhere on the site. `scripts/sainsburys_order_history.py` exists to
+validate and correct them against the real site, the same way
+`sainsburys_add_to_basket.py` does for adding to a basket. See
+[Not done yet](#not-done-yet).
+
 It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
 Tunnel. The target, the options rejected on the way to it, and what that
 topology asks of the configuration are in
@@ -216,6 +228,7 @@ fact that shell access on the host bypasses all of this.
 | `scripts/sainsburys_login.py` | Run locally, by hand, with your own credentials: logs in to Sainsbury's for real and captures the session `add_to_basket` replays |
 | `scripts/sainsburys_search.py` | CLI wrapper to run `sainsburys_search` directly, for validating it against the real page once a session exists |
 | `scripts/sainsburys_add_to_basket.py` | CLI wrapper to run `sainsburys_add_to_basket` directly, for validating it against the real page once a session exists |
+| `scripts/sainsburys_order_history.py` | CLI wrapper to run `sainsburys_order_history` directly, for validating (and correcting) its guessed selectors against the real page once a session exists |
 
 ### Adding a browser action
 
@@ -303,6 +316,15 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
   credentials, not `/sainsburys-login` on the deployed Pi, and not
   `add_to_basket` against a session either of those produced. "Believed
   correct" is as far as this goes without that run.
+- **Verifying `sainsburys_order_history` against the real, logged-in site -
+  a step further behind than the above.** There is no real recording of the
+  order-history page at all yet, so `ORDER_HISTORY_URL` and its selectors
+  (`_ORDER_TILE_SELECTOR`, `_VIEW_ORDER_TEST_ID`, `_ORDER_ITEM_SELECTOR`,
+  `_ITEM_PRICE_TEST_ID`, `_ITEM_QUANTITY_TEST_ID`) are a best-effort guess,
+  not "believed correct" the way `add_to_basket`'s are. Run
+  `scripts/sainsburys_order_history.py` against a real session, use
+  Playwright codegen against the real order-history page to see what it
+  actually renders, and update `sainsburys.py` to match.
 - **Hardening `/sainsburys-login`.** It works as a POC but the branch that
   added it skipped the 100% coverage gate, has no `/security-review` on it,
   and hasn't been through an end-to-end run. The GitHub session cookie is

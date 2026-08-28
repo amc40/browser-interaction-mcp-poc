@@ -1,12 +1,15 @@
 """Browser actions against the Sainsbury's groceries site.
 
-Most of this module (`products_we_love`, `search_products`, `add_to_basket`)
-never touches a password: they either read a public page, or *reuse* a
-session someone else already established, via Playwright's `storage_state` -
-cookies and local storage, not credentials - handed to `browser.browser_page`.
-See `browser.browser_page`'s docstring for that mechanism and
-`docs/deployment.md` §7 for why the captured session is worth protecting as
-carefully as the credentials it stands in for.
+Most of this module (`products_we_love`, `search_products`, `add_to_basket`,
+`order_history`) never touches a password: they either read a public page, or
+*reuse* a session someone else already established, via Playwright's
+`storage_state` - cookies and local storage, not credentials - handed to
+`browser.browser_page`. See `browser.browser_page`'s docstring for that
+mechanism and `docs/deployment.md` §7 for why the captured session is worth
+protecting as carefully as the credentials it stands in for.
+
+`order_history` is the one action in this module whose selectors are still a
+guess rather than confirmed by a real recording - see its own docstring.
 
 `refresh_session` is the one function in this module that is the exception,
 on purpose: something has to actually log in to produce that session in the
@@ -206,6 +209,28 @@ _SEARCH_BOX_NAME = re.compile("^Enter search terms", re.IGNORECASE)
 _PRODUCT_TILE_SELECTOR = '[data-testid^="product-tile-"]'
 _ADD_BUTTON_TEST_ID = "add-button"
 
+# Order-history page: URL and selectors here are a best-effort guess, not
+# confirmed by a real recording the way everything above is - see
+# `order_history`'s docstring for what that means and
+# `scripts/sainsburys_order_history.py` for validating/correcting them
+# against the real, authenticated site.
+ORDER_HISTORY_URL = "https://www.sainsburys.co.uk/gol-ui/order-history"
+_ORDER_TILE_SELECTOR = '[data-testid^="order-summary-"]'
+_ORDER_DATE_TEST_ID = "order-date"
+_VIEW_ORDER_TEST_ID = "view-order"
+_ORDER_ITEM_SELECTOR = '[data-testid="order-item"]'
+_ITEM_PRICE_TEST_ID = "item-price"
+_ITEM_QUANTITY_TEST_ID = "item-quantity"
+
+# A line item whose name heading hasn't shown within this is skipped rather
+# than eaten by Playwright's default 30s wait - same reasoning as
+# `_TILE_HEADING_TIMEOUT_MS` above.
+_ORDER_ITEM_TIMEOUT_MS = 4_000
+
+# Ceiling on how many line items a single order's accordion will inspect -
+# mirrors `_MAX_RESULT_TILES`.
+_MAX_ORDER_ITEM_ROWS = 60
+
 
 class NotLoggedInError(RuntimeError):
     """Raised when an action needs an authenticated session that isn't set up.
@@ -223,6 +248,23 @@ class ProductMatch:
 
     name: str
     image_url: str | None
+
+
+@dataclass(frozen=True)
+class OrderHistoryItem:
+    """One line item read from a past Sainsbury's order.
+
+    `price_paid` is kept as the page's own display text (e.g. ``"£1.85"``)
+    rather than parsed into a number - parsing GBP formatting correctly
+    (offers, "each" pricing, a struck-through "was" price) is its own
+    guess this module hasn't verified either. A caller that wants to
+    compute with it can parse that text itself.
+    """
+
+    name: str
+    price_paid: str | None
+    quantity: int | None
+    order_date: str | None
 
 
 def _consent_cookies() -> list[dict[str, object]]:
@@ -592,6 +634,136 @@ def add_to_basket(
             add_button.click(timeout=15_000)
 
         return product_name.strip()
+
+
+def _order_date(order_tile: Locator) -> str | None:
+    """Read one order tile's date, or `None` if it can't be read."""
+    date_field = order_tile.get_by_test_id(_ORDER_DATE_TEST_ID)
+    if date_field.count() == 0:
+        return None
+    text = date_field.inner_text().strip()
+    return text or None
+
+
+def _parse_quantity(text: str) -> int | None:
+    """Pull the first run of digits out of a quantity display (e.g. "Qty: 2")."""
+    match = re.search(r"\d+", text)
+    return int(match.group()) if match else None
+
+
+def _order_line_item(
+    item_row: Locator, order_date: str | None
+) -> OrderHistoryItem | None:
+    """Read one order-item row, or `None` if it doesn't read as a product.
+
+    Mirrors `_product_match`'s "no name, no result" handling: a row whose
+    name heading never appears is skipped rather than blocking the whole
+    order on a full-length wait.
+    """
+    heading = item_row.get_by_role("heading").first
+    try:
+        heading.wait_for(state="visible", timeout=_ORDER_ITEM_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        return None
+    name = heading.inner_text().strip()
+    if not name:
+        return None
+
+    price_field = item_row.get_by_test_id(_ITEM_PRICE_TEST_ID)
+    price_paid = price_field.inner_text().strip() if price_field.count() > 0 else ""
+    quantity_field = item_row.get_by_test_id(_ITEM_QUANTITY_TEST_ID)
+    quantity_text = quantity_field.inner_text() if quantity_field.count() > 0 else ""
+
+    return OrderHistoryItem(
+        name=name,
+        price_paid=price_paid or None,
+        quantity=_parse_quantity(quantity_text),
+        order_date=order_date,
+    )
+
+
+def _order_line_items(order_tile: Locator) -> Iterator[OrderHistoryItem]:
+    """Yield every readable line item from one order tile, expanding it first.
+
+    Expanding (clicking `_VIEW_ORDER_TEST_ID`) is skipped if the tile has no
+    such control - covers a page shape where items are already inline.
+    """
+    order_date = _order_date(order_tile)
+    view_button = order_tile.get_by_test_id(_VIEW_ORDER_TEST_ID)
+    if view_button.count() > 0:
+        view_button.click(timeout=15_000)
+
+    item_rows = order_tile.locator(_ORDER_ITEM_SELECTOR)
+    for item_row in item_rows.all()[:_MAX_ORDER_ITEM_ROWS]:
+        item = _order_line_item(item_row, order_date)
+        if item is not None:
+            yield item
+
+
+def order_history(
+    *,
+    storage_state_path: Path,
+    max_orders: int = 5,
+) -> list[OrderHistoryItem]:
+    """Return line items - including price paid - from recent Sainsbury's orders.
+
+    Meant as the preference signal for `search_products`/`add_to_basket`:
+    what's actually been bought before, and at what price, rather than
+    something inferred or invented. Read-only - nothing here can add to a
+    basket or place an order.
+
+    **Unverified against the real site.** Unlike every other action in this
+    module, no real Playwright recording exists yet for the order-history
+    page - see the module docstring for what that verification step
+    normally catches. `ORDER_HISTORY_URL` and every selector here
+    (`_ORDER_TILE_SELECTOR` and friends) are a best-effort guess, modelled
+    on patterns already confirmed elsewhere on the site (a product name read
+    from a heading inside its own tile, `data-testid` conventions) rather
+    than invented from nothing - but they are still a guess. Run
+    `scripts/sainsburys_order_history.py` against a real, authenticated
+    session to confirm or correct them; see the README's "Not done yet"
+    section.
+
+    Args:
+        storage_state_path: Path to a Playwright `storage_state` JSON file
+            holding a logged-in session, captured by
+            `scripts/sainsburys_login.py`.
+        max_orders: How many of the most recent orders to read line items
+            from.
+
+    Returns:
+        Line items across up to `max_orders` orders, most recent order
+        first, in the order the page lists them within each order.
+        `price_paid` and `quantity` are best-effort and `None` if they
+        couldn't be read from a given row; `order_date` likewise.
+
+    Raises:
+        NotLoggedInError: If the saved session is missing or not accepted.
+        RuntimeError: If no past orders are found, or orders rendered but no
+            line item could be read from any of them.
+    """
+    with _authenticated_page(storage_state_path) as page:
+        page.goto(ORDER_HISTORY_URL, wait_until="domcontentloaded", timeout=30_000)
+
+        orders = page.locator(_ORDER_TILE_SELECTOR)
+        try:
+            _wait_for_page_to_settle(orders.first)
+        except PlaywrightTimeoutError as exc:
+            msg = "No past orders found on the order history page."
+            raise RuntimeError(msg) from exc
+
+        items: list[OrderHistoryItem] = [
+            item
+            for order_tile in orders.all()[:max_orders]
+            for item in _order_line_items(order_tile)
+        ]
+        if not items:
+            msg = (
+                "Found past orders but could not read any line items from "
+                "them - the order history page markup has probably changed."
+            )
+            raise RuntimeError(msg)
+        return items
 
 
 def refresh_session(

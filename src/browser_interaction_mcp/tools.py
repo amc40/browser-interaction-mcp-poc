@@ -75,6 +75,35 @@ class AddedToBasket(BaseModel):
     product: str = Field(description="Name of the product added, as shown on its page.")
 
 
+class OrderHistoryLineItem(BaseModel):
+    """One line item read from a past Sainsbury's order."""
+
+    name: str = Field(description="Product name, exactly as shown on the order.")
+    price_paid: str | None = Field(
+        description=(
+            "Price paid for this item, exactly as displayed (e.g. '£1.85'), or "
+            "None if it could not be read."
+        ),
+    )
+    quantity: int | None = Field(
+        description="Quantity ordered, or None if it could not be read.",
+    )
+    order_date: str | None = Field(
+        description=(
+            "Date of the order this item came from, exactly as displayed, or "
+            "None if it could not be read."
+        ),
+    )
+
+
+class OrderHistory(BaseModel):
+    """Line items from the caller's most recent Sainsbury's orders."""
+
+    items: list[OrderHistoryLineItem] = Field(
+        description="Line items across the requested orders, most recent order first.",
+    )
+
+
 def _guard_session[T](action: Callable[[], T]) -> T:
     """Run a browser action, surfacing a missing or stale session usefully.
 
@@ -206,3 +235,42 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
             ),
         )
         return AddedToBasket(product=product)
+
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+    )
+    def sainsburys_order_history(max_orders: int = 5) -> OrderHistory:
+        """Return line items - including price paid - from recent Sainsbury's orders.
+
+        Use this to learn what the person has actually bought before, and
+        what they paid, so `sainsburys_search` results can be weighed
+        against real history (a brand bought repeatedly, a price that's
+        gone up) instead of guessed at. Read-only - nothing here adds to a
+        basket or places an order.
+
+        **Unverified against the real site.** Unlike `sainsburys_search` and
+        `sainsburys_add_to_basket`, no real recording exists yet for the
+        order-history page, so its selectors are a best-effort guess rather
+        than confirmed - see `sainsburys.order_history`'s docstring and the
+        README's "Not done yet" section. Results may be incomplete or wrong
+        until that's been run against a real, authenticated session.
+
+        Needs an already-authenticated Sainsbury's session - see
+        `sainsburys_add_to_basket`'s docstring for how to capture one.
+        """
+        items = _guard_session(
+            lambda: sainsburys.order_history(
+                storage_state_path=_require_storage_state(), max_orders=max_orders
+            ),
+        )
+        return OrderHistory(
+            items=[
+                OrderHistoryLineItem(
+                    name=item.name,
+                    price_paid=item.price_paid,
+                    quantity=item.quantity,
+                    order_date=item.order_date,
+                )
+                for item in items
+            ],
+        )
