@@ -89,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             password,
             storage_state_path=args.storage_state,
             get_otp=_make_get_otp(args.ipc_dir, args.otp_timeout),
+            failure_screenshot_path=args.ipc_dir / "failure.png",
         )
     except sainsburys.NotLoggedInError as exc:
         # These messages are fixed strings from sainsburys.py - no credential

@@ -46,19 +46,21 @@ showed, and isn't obvious from the public pages alone:
 
 - `www.sainsburys.co.uk/gol-ui/oauth/login` is only a redirect shell now: it
   bounces to the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...`
-  (an Ory-style identity provider). `refresh_session` waits for the form to
-  appear before acting, and treats either path as "not logged in".
+  (an Ory-style identity provider). It redirects through login-shaped URLs
+  even on the *success* path (a silent session check on the way to an account
+  page), so `refresh_session` decides "logged in or not" by whether the login
+  *form* is on screen, never by the URL.
 - The consent banner is OneTrust, injected asynchronously *after* the load
   event, with a full-page backdrop that blocks every click until it's
   actioned. Rather than race to dismiss it, `_consent_cookies` seeds the
   cookies OneTrust writes on a "Continue without accepting" choice
   (strictly-necessary only, every optional category refused) before the first
   navigation, so it never renders.
-- MFA, when Sainsbury's asks for it, is a further step at
-  `account.sainsburys.co.uk/gol/login/mfa` - not something `add_to_basket`
-  itself ever has to handle, since by the time it runs the session is already
-  captured, but the login flow has to recognise it as "still logging in", not
-  "done".
+- MFA, when Sainsbury's asks for it, is a further step after the password -
+  not guaranteed to appear (it seems to depend on whether the device/network
+  is already trusted). `refresh_session` detects it by the verification-code
+  field showing up, and only then calls `get_otp`. Not something
+  `add_to_basket` handles: by the time it runs the session is already captured.
 - Search is a `combobox`, filled and submitted with Enter - not a URL query
   parameter.
 - Each search result is `data-testid="product-tile-<id>"`, and adding it to
@@ -123,38 +125,38 @@ _CONSENT_COOKIE_HOSTS = (".www.sainsburys.co.uk", ".account.sainsburys.co.uk")
 # link styled as a heading) - skipped rather than counted as products.
 _NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE)
 
-# Where a browser lands when a session isn't (or is no longer) authenticated.
 # `www.sainsburys.co.uk/gol-ui/oauth/login` is only a shell now: it bounces to
-# the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...`
-# (an Ory-style identity provider). Either path means "not logged in"; matched
-# by path only, since the query string carries a per-attempt challenge.
+# the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...` (an
+# Ory-style identity provider). MFA, when Sainsbury's asks for it, is a further
+# step there. Both are detected by the elements they render, not their URL:
+# these SPAs redirect through login-shaped URLs even on the *success* path (a
+# silent session check), so a URL match gives false failures.
 LOGIN_URL = "https://www.sainsburys.co.uk/gol-ui/oauth/login"
-_LOGIN_PATHS = ("/gol-ui/oauth/login", "/gol/login")
-
-# MFA, when Sainsbury's asks for it, is a further step under the account
-# domain - not guaranteed to appear (it seems to depend on whether the
-# device/network is already trusted). Checked before the not-logged-in paths,
-# since "/gol/login/mfa" also contains "/gol/login".
-_MFA_PATH = "/gol/login/mfa"
 
 
-def _on_login_page(url: str) -> bool:
-    """Whether ``url`` is a Sainsbury's login page (and not the MFA step)."""
-    return _MFA_PATH not in url and any(path in url for path in _LOGIN_PATHS)
+def _raise_if_not_logged_in(
+    page: Page, message: str, *, screenshot_path: Path | None = None
+) -> None:
+    """Raise ``NotLoggedInError`` if the login form is the thing on screen.
 
-
-def _raise_if_not_logged_in(page: Page, message: str) -> None:
-    """Raise ``NotLoggedInError`` if the page has landed on the login screen.
-
-    An unauthenticated visit to an account page redirects to the login form
-    *client-side*, a beat after the first document loads - so this waits
-    briefly for that redirect before deciding, rather than reading a URL that
-    hasn't settled yet.
+    Checks for the form itself, not just the URL: a *successful* visit to an
+    account page bounces back through the identity provider's ``/gol/login``
+    URL for a silent session check, so a URL match on its own gives false
+    failures. An unauthenticated visit ends with the form actually rendered.
     """
     with contextlib.suppress(PlaywrightTimeoutError):
-        page.wait_for_url(_on_login_page, timeout=10_000)
-    if _on_login_page(page.url):
-        raise NotLoggedInError(message)
+        page.wait_for_load_state("domcontentloaded", timeout=15_000)
+    page.wait_for_timeout(2_000)
+    if not page.get_by_test_id(_USERNAME_TEST_ID).is_visible():
+        return
+    if screenshot_path is not None:
+        # Best effort: a debug aid must never mask the real failure below.
+        # The image could show the typed username or an on-screen OTP, so it's
+        # locked to the owner (the caller already keeps it in a 0700 dir).
+        with contextlib.suppress(Exception):
+            page.screenshot(path=screenshot_path)
+            screenshot_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    raise NotLoggedInError(message)
 
 
 # Login form field test ids, from the same recording.
@@ -355,7 +357,7 @@ def add_to_basket(
         cookies=_consent_cookies(),
     ) as page:
         with contextlib.suppress(PlaywrightTimeoutError):
-            page.goto(MY_ACCOUNT_URL, wait_until="domcontentloaded", timeout=30_000)
+            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
         _check_logged_in(page)
 
         search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
@@ -392,6 +394,7 @@ def refresh_session(
     *,
     storage_state_path: Path,
     get_otp: Callable[[], str | None],
+    failure_screenshot_path: Path | None = None,
 ) -> None:
     """Log in for real, and overwrite ``storage_state_path`` with the result.
 
@@ -411,6 +414,9 @@ def refresh_session(
             return the verification code to submit, or `None` if the
             operator declined or none was available; either way, `None`
             aborts the refresh rather than submitting an empty code.
+        failure_screenshot_path: If set, a screenshot of the page is written
+            here when the login is judged to have failed - a debugging aid,
+            since the failure page is the only thing that says *why*.
 
     Raises:
         NotLoggedInError: If MFA was required but `get_otp` returned `None`,
@@ -432,7 +438,10 @@ def refresh_session(
         page.get_by_test_id(_LOG_IN_TEST_ID).click(timeout=15_000)
         page.wait_for_load_state("domcontentloaded", timeout=30_000)
 
-        if _MFA_PATH in page.url:
+        otp_field = page.get_by_test_id(_OTP_TEST_ID)
+        with contextlib.suppress(PlaywrightTimeoutError):
+            otp_field.wait_for(state="visible", timeout=15_000)
+        if otp_field.is_visible():
             otp = get_otp()
             if otp is None:
                 msg = (
@@ -440,15 +449,20 @@ def refresh_session(
                     "provided - not completing the login."
                 )
                 raise NotLoggedInError(msg)
-            page.get_by_test_id(_OTP_TEST_ID).fill(otp)
+            otp_field.fill(otp)
             page.get_by_test_id(_SUBMIT_CODE_TEST_ID).click(timeout=15_000)
+            # The code submit kicks off the redirect that actually completes
+            # the login; let it finish before navigating away from it.
+            page.wait_for_load_state("domcontentloaded", timeout=30_000)
 
         with contextlib.suppress(PlaywrightTimeoutError):
-            page.goto(MY_ACCOUNT_URL, wait_until="domcontentloaded", timeout=30_000)
+            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
         _raise_if_not_logged_in(
             page,
             "Still not logged in after submitting the login form (and any "
-            "verification code) - check the password is correct.",
+            "verification code) - check the password and, if you were asked "
+            "for one, the verification code.",
+            screenshot_path=failure_screenshot_path,
         )
 
         page.context.storage_state(path=storage_state_path)
