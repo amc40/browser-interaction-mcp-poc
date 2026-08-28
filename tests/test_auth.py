@@ -181,6 +181,22 @@ def test_http_transport_authenticates_against_github() -> None:
     assert str(provider.base_url).startswith("http://127.0.0.1:9001")
 
 
+def test_no_scopes_are_requested() -> None:
+    """The token's own account id and login are all this server reads.
+
+    GitHub hands those back for any authenticated caller regardless of scope,
+    so nothing needs to be requested. ``GitHubProvider`` defaults to the
+    ``user`` scope - full read/write access to the profile - which would be
+    granted for no benefit if this weren't overridden.
+    """
+    provider = build_auth_provider(_http_settings())
+
+    assert provider is not None
+    verifier = provider._token_validator
+    assert isinstance(verifier, GitHubTokenVerifier)
+    assert verifier.required_scopes == []
+
+
 def _token_cache(provider: GitHubProvider) -> TokenCache:
     """Return the cache the provider verifies tokens through."""
     verifier = provider._token_validator

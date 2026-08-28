@@ -111,6 +111,15 @@ def build_auth_provider(settings: Settings) -> GitHubProvider | None:
         client_id=client_id,
         client_secret=client_secret.get_secret_value(),
         base_url=settings.oauth_base_url,
+        # GitHubProvider defaults to the "user" scope, which grants read *and*
+        # write access to the whole profile (name, bio, org membership, ability
+        # to follow/unfollow, etc). All this server ever reads off the token is
+        # the account's id and login (see github_user_id_is), and GitHub hands
+        # those back on any authenticated /user call regardless of granted
+        # scope - they're the caller's own public profile, not scoped data. So
+        # no scope is required at all; the consent screen GitHub shows during
+        # the OAuth flow reflects that.
+        required_scopes=[],
         # Verification is two GitHub API calls, and without a cache that is two
         # per request. See docs/deployment.md for the revocation delay it buys.
         cache_ttl_seconds=settings.github_token_cache_seconds,
