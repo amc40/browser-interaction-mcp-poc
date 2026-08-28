@@ -14,7 +14,7 @@ import contextlib
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -107,13 +107,6 @@ class FakePage:
     """A page that only knows the lookups `sainsburys.py` performs."""
 
     headings: list[FakeLocator] = field(default_factory=list)
-    cookie_button: FakeLocator = field(default_factory=lambda: FakeLocator(count_=0))
-    # No OneTrust banner by default: waiting for it times out, so the caller
-    # falls back to the role-name match on `cookie_button`.
-    onetrust_banner: FakeLocator = field(
-        default_factory=lambda: FakeLocator(count_=0, raises_on_wait=True)
-    )
-    onetrust_accept: FakeLocator = field(default_factory=lambda: FakeLocator(count_=1))
     search_box: FakeLocator = field(default_factory=FakeLocator)
     product_tile: FakeLocator = field(
         default_factory=lambda: FakeLocator(
@@ -145,13 +138,15 @@ class FakePage:
         """No-op: the fake has no real navigation to settle."""
         del state, timeout
 
+    def wait_for_url(self, url: object, *, timeout: int | None = None) -> None:
+        """No-op: redirect tests set `self.url` up front."""
+        del url, timeout
+
     def get_by_role(
         self, role: str, *, name: object = None
     ) -> FakeLocator | _HeadingsLocator:
-        """Return the matching button, combobox, or heading locator."""
+        """Return the matching combobox or heading locator."""
         del name
-        if role == "button":
-            return self.cookie_button
         if role == "combobox":
             return self.search_box
         if role == "heading":
@@ -161,10 +156,6 @@ class FakePage:
 
     def locator(self, selector: str) -> FakeLocator:
         """Return the locator for a CSS selector `sainsburys.py` uses."""
-        if selector == sainsburys._ONETRUST_BANNER:
-            return self.onetrust_banner
-        if selector == sainsburys._ONETRUST_ACCEPT_BUTTON:
-            return self.onetrust_accept
         assert selector == sainsburys._PRODUCT_TILE_SELECTOR, (
             f"unexpected selector {selector!r}"
         )
@@ -211,6 +202,7 @@ def _wire(
     page: FakePage,
     *,
     storage_states: list[object] | None = None,
+    cookies_seen: list[Any] | None = None,
 ) -> None:
     """Monkeypatch `browser_page` to hand `page` straight to the caller.
 
@@ -219,15 +211,19 @@ def _wire(
         page: The fake page every call opens.
         storage_states: If given, every `storage_state` a caller passed is
             appended here, so a test can assert on it.
+        cookies_seen: If given, every `cookies` list a caller passed is
+            appended here.
     """
 
     @contextlib.contextmanager
     def fake_browser_page(
-        *, headless: bool, storage_state: object = None
+        *, headless: bool, storage_state: object = None, cookies: object = None
     ) -> Iterator[FakePage]:
         assert headless is False, "browser actions here must ask for a headed session"
         if storage_states is not None:
             storage_states.append(storage_state)
+        if cookies_seen is not None:
+            cookies_seen.append(cookies)
         yield page
 
     monkeypatch.setattr(sainsburys, "browser_page", fake_browser_page)
@@ -281,35 +277,24 @@ def test_honours_a_smaller_count(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sainsburys.products_we_love(count=2) == ["A", "B"]
 
 
-def test_dismisses_a_cookie_banner_when_present(
+def test_seeds_minimal_consent_cookies_so_the_banner_never_renders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(
-        headings=[_heading("Products we love"), _heading("A")],
-        cookie_button=FakeLocator(count_=1),
-    )
-    _wire(monkeypatch, page)
+    page = FakePage(headings=[_heading("Products we love"), _heading("A")])
+    cookies_seen: list[Any] = []
+    _wire(monkeypatch, page, cookies_seen=cookies_seen)
 
     sainsburys.products_we_love()
 
-    assert page.cookie_button.clicked
-
-
-def test_dismisses_the_onetrust_banner_when_it_appears(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """OneTrust's async banner: click its accept button, not the role-name one."""
-    page = FakePage(
-        headings=[_heading("Products we love"), _heading("A")],
-        onetrust_banner=FakeLocator(count_=1),
-        cookie_button=FakeLocator(count_=1),
-    )
-    _wire(monkeypatch, page)
-
-    sainsburys.products_we_love()
-
-    assert page.onetrust_accept.clicked
-    assert not page.cookie_button.clicked
+    seeded = {c["name"]: c for c in cookies_seen[0]}
+    assert "OptanonAlertBoxClosed" in seeded
+    consent = seeded["OptanonConsent"]["value"]
+    # strictly-necessary only: group 1 in, every optional group out.
+    assert "groups=1%3A1%2C2%3A0%2C3%3A0%2C4%3A0" in consent
+    assert {c["domain"] for c in cookies_seen[0]} == {
+        ".www.sainsburys.co.uk",
+        ".account.sainsburys.co.uk",
+    }
 
 
 def test_raises_when_no_heading_is_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,15 +392,16 @@ def test_add_to_basket_clicks_add_once_per_unit_of_quantity(
     assert page.product_tile.add_button.click_count == 3
 
 
-def test_add_to_basket_dismisses_a_cookie_banner_when_present(
+def test_add_to_basket_seeds_consent_cookies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(cookie_button=FakeLocator(count_=1))
-    _wire(monkeypatch, page)
+    page = FakePage()
+    cookies_seen: list[Any] = []
+    _wire(monkeypatch, page, cookies_seen=cookies_seen)
 
     sainsburys.add_to_basket(storage_state_path=Path("session.json"))
 
-    assert page.cookie_button.clicked
+    assert any(c["name"] == "OptanonConsent" for c in cookies_seen[0])
 
 
 def test_add_to_basket_raises_when_redirected_to_login(
@@ -585,12 +571,13 @@ def test_refresh_session_raises_when_still_not_logged_in_afterwards(
     assert page.context.storage_state_calls == []
 
 
-def test_refresh_session_dismisses_cookie_banners(
+def test_refresh_session_seeds_consent_cookies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    page = FakePage(cookie_button=FakeLocator(count_=1))
-    _wire(monkeypatch, page)
+    page = FakePage()
+    cookies_seen: list[Any] = []
+    _wire(monkeypatch, page, cookies_seen=cookies_seen)
 
     sainsburys.refresh_session(
         "alan@example.com",
@@ -599,7 +586,7 @@ def test_refresh_session_dismisses_cookie_banners(
         get_otp=_unreachable_otp,
     )
 
-    assert page.cookie_button.clicked
+    assert any(c["name"] == "OptanonConsent" for c in cookies_seen[0])
 
 
 def test_refresh_session_opens_a_headed_session_with_no_prior_storage_state(
