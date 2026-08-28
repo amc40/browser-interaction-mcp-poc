@@ -108,6 +108,12 @@ class FakePage:
 
     headings: list[FakeLocator] = field(default_factory=list)
     cookie_button: FakeLocator = field(default_factory=lambda: FakeLocator(count_=0))
+    # No OneTrust banner by default: waiting for it times out, so the caller
+    # falls back to the role-name match on `cookie_button`.
+    onetrust_banner: FakeLocator = field(
+        default_factory=lambda: FakeLocator(count_=0, raises_on_wait=True)
+    )
+    onetrust_accept: FakeLocator = field(default_factory=lambda: FakeLocator(count_=1))
     search_box: FakeLocator = field(default_factory=FakeLocator)
     product_tile: FakeLocator = field(
         default_factory=lambda: FakeLocator(
@@ -135,6 +141,10 @@ class FakePage:
         del wait_until, timeout
         self.goto_calls.append(url)
 
+    def wait_for_load_state(self, state: str, *, timeout: int | None = None) -> None:
+        """No-op: the fake has no real navigation to settle."""
+        del state, timeout
+
     def get_by_role(
         self, role: str, *, name: object = None
     ) -> FakeLocator | _HeadingsLocator:
@@ -150,7 +160,11 @@ class FakePage:
         raise AssertionError(msg)
 
     def locator(self, selector: str) -> FakeLocator:
-        """Return the product tile, for the `product-tile-*` selector."""
+        """Return the locator for a CSS selector `sainsburys.py` uses."""
+        if selector == sainsburys._ONETRUST_BANNER:
+            return self.onetrust_banner
+        if selector == sainsburys._ONETRUST_ACCEPT_BUTTON:
+            return self.onetrust_accept
         assert selector == sainsburys._PRODUCT_TILE_SELECTOR, (
             f"unexpected selector {selector!r}"
         )
@@ -279,6 +293,23 @@ def test_dismisses_a_cookie_banner_when_present(
     sainsburys.products_we_love()
 
     assert page.cookie_button.clicked
+
+
+def test_dismisses_the_onetrust_banner_when_it_appears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OneTrust's async banner: click its accept button, not the role-name one."""
+    page = FakePage(
+        headings=[_heading("Products we love"), _heading("A")],
+        onetrust_banner=FakeLocator(count_=1),
+        cookie_button=FakeLocator(count_=1),
+    )
+    _wire(monkeypatch, page)
+
+    sainsburys.products_we_love()
+
+    assert page.onetrust_accept.clicked
+    assert not page.cookie_button.clicked
 
 
 def test_raises_when_no_heading_is_found(monkeypatch: pytest.MonkeyPatch) -> None:
