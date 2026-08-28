@@ -196,7 +196,10 @@ class SecretRedactingFilter(logging.Filter):
         Args:
             record: The record about to be emitted.
         """
-        if record.exc_info is None:
+        # exc_info is a 3-tuple only when there is a traceback to render; it is
+        # also left as the bool a caller passed to `logger.log(exc_info=...)`
+        # (FastMCP logs handled tool errors with `exc_info=False`), or None.
+        if not isinstance(record.exc_info, tuple):
             return
         _, exc, _ = record.exc_info
         if exc is None:  # pragma: no cover - logging's (None, None, None) form

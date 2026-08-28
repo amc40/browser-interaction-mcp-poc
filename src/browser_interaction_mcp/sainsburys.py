@@ -137,21 +137,46 @@ _NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE
 LOGIN_URL = "https://www.sainsburys.co.uk/gol-ui/oauth/login"
 
 
+# How long `_raise_if_not_logged_in` waits for the page to land on a definite
+# outcome, and how often it re-checks. A dead session's redirect to the real
+# login form can take several seconds; a single fixed pause was checking before
+# it landed, so an expired session slipped through here and only failed later,
+# on the first real interaction, as an opaque Playwright timeout instead of an
+# actionable "log in again".
+_SETTLE_POLL_MS = 500
+_SETTLE_TIMEOUT_MS = 20_000
+_SETTLE_CHECKS = _SETTLE_TIMEOUT_MS // _SETTLE_POLL_MS
+
+
 def _raise_if_not_logged_in(
     page: Page, message: str, *, screenshot_path: Path | None = None
 ) -> None:
-    """Raise ``NotLoggedInError`` if the login form is the thing on screen.
+    """Raise ``NotLoggedInError`` if the page settled on the login form.
 
-    Checks for the form itself, not just the URL: a *successful* visit to an
-    account page bounces back through the identity provider's ``/gol/login``
-    URL for a silent session check, so a URL match on its own gives false
-    failures. An unauthenticated visit ends with the form actually rendered.
+    Waits for the page to settle on one of two outcomes - the logged-in site
+    header (its search box) or the login form - rather than deciding after a
+    fixed pause that can check too early. Reads the elements, never the URL: a
+    *successful* visit to an account page bounces back through the identity
+    provider's ``/gol/login`` URL for a silent session check, so a URL match
+    on its own gives false failures.
     """
     with contextlib.suppress(PlaywrightTimeoutError):
         page.wait_for_load_state("domcontentloaded", timeout=15_000)
-    page.wait_for_timeout(2_000)
-    if not page.get_by_test_id(_USERNAME_TEST_ID).is_visible():
+
+    login_form = page.get_by_test_id(_USERNAME_TEST_ID)
+    signed_in = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
+    for _ in range(_SETTLE_CHECKS):
+        if login_form.is_visible():
+            break
+        if signed_in.is_visible():
+            return
+        page.wait_for_timeout(_SETTLE_POLL_MS)
+    else:
+        # Neither outcome within the timeout: fall back to the prior behaviour
+        # of treating "no login form" as logged in. A genuinely broken page
+        # then fails downstream with its own, more specific error.
         return
+
     if screenshot_path is not None:
         # Best effort: a debug aid must never mask the real failure below.
         # The image could show the typed username or an on-screen OTP, so it's
@@ -323,11 +348,11 @@ def _check_logged_in(page: Page) -> None:
     _raise_if_not_logged_in(
         page,
         (
-            "Redirected to the Sainsbury's login page: the saved session is "
-            "missing or no longer accepted. Run scripts/sainsburys_login.py "
-            "locally, or visit /sainsburys-login on the deployed server, to "
-            "log in and capture a fresh one - see browser.browser_page's "
-            "docstring for how it's used from there."
+            "The saved Sainsbury's session is no longer valid - it has expired, "
+            "or the account was signed out elsewhere. Ask the operator to "
+            "re-authenticate by opening /sainsburys-login on this server and "
+            "signing in (or, running locally, by rerunning "
+            "scripts/sainsburys_login.py), then try again."
         ),
     )
 
