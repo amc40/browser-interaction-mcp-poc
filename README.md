@@ -187,6 +187,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
+| `docs/site-automation-gotchas.md` | Failure patterns found driving the real site, for when this generalises |
 | `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
 | `scripts/sainsburys_login.py` | Run locally, by hand, with your own credentials: logs in to Sainsbury's for real and captures the session `add_to_basket` replays |
 | `scripts/sainsburys_add_to_basket.py` | CLI wrapper to run `sainsburys_add_to_basket` directly, for validating it against the real page once a session exists |
