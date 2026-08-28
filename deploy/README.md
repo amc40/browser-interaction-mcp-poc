@@ -189,6 +189,33 @@ It still needs three things this playbook does not automate:
    do by hand" output prints both reminders with your actual hostname filled
    in.
 
+## Manual path: publishing a branch over SSH
+
+The webhook above only ever ships `main`, and only once CI is green on it —
+that gate is the point. Sometimes you want to run something else on the real
+hardware first: a branch under review, or arm64-specific behaviour CI can
+never exercise (see [`docs/pi-deployment.md`](../docs/pi-deployment.md)'s
+"arm64 is never exercised by CI"). `deploy/deploy-branch.sh` does that, and is
+deliberately reachable only one way — a real SSH session and sudo, with no
+webhook, MCP tool, cron job or other unattended trigger anywhere near it:
+
+```sh
+ssh <your-admin-user>@<the-pi>
+sudo -u deploy /opt/browser-interaction-mcp/deploy/deploy-branch.sh <branch>
+```
+
+It fetches and hard-resets the checkout to `origin/<branch>`, `uv sync`s and
+restarts the service — the same steps `deploy.sh` runs for `main`, minus the
+CI gate and the HMAC signature, which is exactly why it refuses to run
+against `main` itself: that branch already has a path with both, and this one
+has neither. It needs no sudoers changes beyond what `deploy_account` already
+grants `deploy` — the same narrow `systemctl restart` rule `deploy.sh` uses
+(`roles/deploy_account/templates/sudoers.j2`) — so getting from an admin
+account to a restarted service still needs sudo to become `deploy` in the
+first place, which is the actual authorisation check here: no signature, no
+token, just whether the person typing the command already has a shell on the
+box.
+
 ## How the deployment mitigations land
 
 Numbered against [`docs/deployment.md`](../docs/deployment.md).

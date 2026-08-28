@@ -252,6 +252,35 @@ It cannot install a new apt package, change a systemd unit, or touch the
 tunnel config — those still need this playbook, run by hand, exactly as
 today. The two mechanisms are not merged, and are not meant to be.
 
+## Manual path: publishing a branch over SSH
+
+The webhook above only ever ships a commit CI has already passed on `main`,
+gated by an HMAC signature — deliberately, since it is triggered by CI with
+nobody watching. That leaves no way to run something else on the real
+hardware first: a branch still under review, or the arm64-specific failures
+CI structurally
+[cannot exercise](#repository-changes-required). `deploy/deploy-branch.sh`
+covers that gap the same way `deploy.sh` covers `main` — fetch, hard-reset,
+`uv sync`, `playwright install`, restart — but for whichever branch is named
+on its command line, and with **no** network path to it at all: no webhook
+route, no MCP tool, no cron job, nothing except an operator who already has
+an SSH session and sudo on the box running it by hand
+(`sudo -u deploy .../deploy-branch.sh <branch>`). It refuses to run against
+`main` itself, since that branch already has a path with a CI gate and a
+signature and this one has neither. See `deploy/README.md`'s own section on
+it for the exact invocation and the sudoers rule it reuses — no new one is
+needed, since it asks `deploy` for nothing `deploy.sh` doesn't already have.
+
+The authorisation model here is intentionally the blunt one: unlike the
+webhook (a shared secret) or the MCP server itself (GitHub OAuth pinned to
+one account), this checks nothing beyond "does this shell already have sudo
+on the host" — the same fact
+[§6, shell access](#what-the-tunnel-changes-about-authentication) already
+treats as full control of everything the server automates. Adding a
+network-reachable trigger for arbitrary branches would need its own
+authorisation story from scratch; requiring an existing SSH session instead
+means it inherits one that's already there.
+
 ## Known constraints
 
 - **`playwright install chrome` fails on Linux arm64** — Chrome for Testing has

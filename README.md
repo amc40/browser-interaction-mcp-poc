@@ -98,7 +98,11 @@ without re-running that playbook: GitHub Actions signs a request to a small
 webhook receiver on the Pi (`deploy_webhook.py`) once CI is green on `main`,
 which pulls, syncs and restarts itself — see
 [`docs/pi-deployment.md`](docs/pi-deployment.md#fast-path-webhook-triggered-code-deploys)
-for the scope boundary against the playbook.
+for the scope boundary against the playbook. Publishing anything other than
+`main` — a branch still under review, or arm64 behaviour CI never exercises —
+has no such network path at all: `deploy/deploy-branch.sh` does the same
+fetch/sync/restart for a named branch, but only runs by hand over SSH, see
+[`docs/pi-deployment.md`](docs/pi-deployment.md#manual-path-publishing-a-branch-over-ssh).
 
 Browser actions go stale as pages change.
 [`docs/self-healing.md`](docs/self-healing.md) proposes a sandboxed agent that
