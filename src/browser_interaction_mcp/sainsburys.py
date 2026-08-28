@@ -438,44 +438,92 @@ def search_products(
         count: How many results to return.
 
     Returns:
-        Up to ``count`` matches, in the order the results page lists them.
-        `image_url` is best-effort - the tile's first `<img>`, unlike the
-        other selectors here hasn't been confirmed against a real recording -
-        and is `None` if the tile has no image or the image has no `src`.
+        Up to ``count`` matches, in the order the results page lists them -
+        fewer if the page mixes in non-product tiles (sponsored slots), which
+        are skipped. `image_url` is best-effort - the tile's first `<img>`,
+        unlike the other selectors here hasn't been confirmed against a real
+        recording - and is `None` if the tile has no image or no `src`.
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
-        RuntimeError: If no results are found.
+        RuntimeError: If no results are found, or results rendered but no
+            product name could be read from any of them.
     """
     with _authenticated_page(storage_state_path) as page:
         tiles = _run_search(page, query)
-        return [_product_match(tile) for tile in tiles.all()[:count]]
+        matches: list[ProductMatch] = []
+        for match in _readable_matches(tiles):
+            matches.append(match)
+            if len(matches) == count:
+                break
+        if not matches:
+            msg = (
+                f"Found result tiles for {query!r} but read a product name from "
+                "none of them - the results page markup has probably changed."
+            )
+            raise RuntimeError(msg)
+        return matches
 
 
-def _product_match(tile: Locator) -> ProductMatch:
-    """Read one tile's product name and image - the one place either is read.
+# The results grid mixes in tiles that share the `product-tile-` testid prefix
+# but carry no product name heading (sponsored slots, "browse the aisle"
+# cards), and renders tiles past the first few lazily. Reading one of those
+# with Playwright's default 30s wait hangs the whole call, so a tile whose
+# heading hasn't shown within this is treated as "not a product" and skipped.
+_TILE_HEADING_TIMEOUT_MS = 4_000
 
-    `add_to_basket`'s exact-match lookup reuses this for `name` rather than
-    re-deriving it, so a tile's name can't be read one way for display and
-    another way for matching.
+# Ceiling on how many result tiles a single search will inspect - enough to
+# cover a full results page, bounded so a pathological page can't turn the
+# per-tile waits above into a minutes-long call.
+_MAX_RESULT_TILES = 60
+
+
+def _product_match(tile: Locator) -> ProductMatch | None:
+    """Read one tile's product name and image, or ``None`` if it isn't one.
+
+    The one place either field is read: `add_to_basket`'s exact-match lookup
+    reuses this for `name` so a tile's name can't be read one way for display
+    and another way for matching. Returns ``None`` - rather than blocking on
+    `inner_text` for the full default timeout - for a tile whose name heading
+    never appears; see `_TILE_HEADING_TIMEOUT_MS`.
     """
-    name = tile.get_by_role("heading").first.inner_text().strip()
+    heading = tile.get_by_role("heading").first
+    try:
+        heading.wait_for(state="visible", timeout=_TILE_HEADING_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        return None
+    name = heading.inner_text().strip()
+    if not name:
+        return None
     image = tile.locator("img").first
     image_url = image.get_attribute("src") if image.count() > 0 else None
     return ProductMatch(name=name, image_url=image_url)
+
+
+def _readable_matches(tiles: Locator) -> Iterator[ProductMatch]:
+    """Yield a `ProductMatch` for each result tile that reads as a product.
+
+    Tiles that don't (see `_product_match`) are skipped rather than aborting
+    the search, so one sponsored slot among the results doesn't sink the call.
+    """
+    for tile in tiles.all()[:_MAX_RESULT_TILES]:
+        match = _product_match(tile)
+        if match is not None:
+            yield match
 
 
 def _find_exact_match(tiles: Locator, product_name: str) -> Locator | None:
     """Return the first tile whose product name exactly equals ``product_name``.
 
     Matches on the same name `_product_match` would report for that tile -
-    see its docstring for why.
+    see its docstring for why - and skips tiles that don't read as a product.
     """
     target = product_name.strip()
-    return next(
-        (tile for tile in tiles.all() if _product_match(tile).name == target),
-        None,
-    )
+    for tile in tiles.all()[:_MAX_RESULT_TILES]:
+        match = _product_match(tile)
+        if match is not None and match.name == target:
+            return tile
+    return None
 
 
 def add_to_basket(

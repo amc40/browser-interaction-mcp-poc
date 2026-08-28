@@ -526,6 +526,58 @@ def test_search_products_raises_when_no_results_are_found(
         )
 
 
+def test_search_products_skips_a_tile_whose_heading_never_appears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A sponsored / non-product tile shares the testid prefix but has no name
+    # heading. It must be skipped, not block the whole search on a 30s wait.
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="Real Milk 2L")),
+            FakeLocator(heading=FakeLocator(raises_on_wait=True)),
+            FakeLocator(heading=FakeLocator(text="Other Milk 1L")),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    results = sainsburys.search_products(storage_state_path=Path("session.json"))
+
+    assert [match.name for match in results] == ["Real Milk 2L", "Other Milk 1L"]
+
+
+def test_search_products_skips_a_tile_with_a_blank_heading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="   ")),
+            FakeLocator(heading=FakeLocator(text="Real Product")),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    results = sainsburys.search_products(storage_state_path=Path("session.json"))
+
+    assert [match.name for match in results] == ["Real Product"]
+
+
+def test_search_products_raises_when_tiles_are_present_but_none_are_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Distinct from "no results": the grid rendered, but not one tile yielded a
+    # name - a louder signal that the heading markup has drifted.
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(raises_on_wait=True)),
+            FakeLocator(heading=FakeLocator(text="")),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="markup has probably changed"):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
+
+
 # ---------------------------------------------------------------------------
 # add_to_basket
 # ---------------------------------------------------------------------------
@@ -617,6 +669,28 @@ def test_add_to_basket_raises_when_no_result_matches_exactly(
         sainsburys.add_to_basket(
             "Fairy Lemon Washing Up Liquid", storage_state_path=Path("session.json")
         )
+
+
+def test_add_to_basket_skips_an_unreadable_tile_to_reach_the_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wanted = FakeLocator(count_=1)
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(raises_on_wait=True)),
+            FakeLocator(
+                heading=FakeLocator(text="Fairy Lemon Washing Up Liquid"),
+                add_button=wanted,
+            ),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    sainsburys.add_to_basket(
+        "Fairy Lemon Washing Up Liquid", storage_state_path=Path("session.json")
+    )
+
+    assert wanted.clicked
 
 
 def test_add_to_basket_passes_the_storage_state_path_to_browser_page(

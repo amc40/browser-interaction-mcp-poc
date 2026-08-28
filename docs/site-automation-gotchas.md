@@ -60,6 +60,24 @@ hard way. Each is a pattern, not a one-off.
   `contextlib.suppress(PlaywrightTimeoutError)` and read the result off the
   page afterwards.
 
+## Result lists / grids
+
+- **A list selector matches more than the leaf items.** Sainsbury's search
+  results are `data-testid="product-tile-<id>"`, but the same prefix also
+  covers sponsored slots and "browse the aisle" cards that carry no product
+  name heading. Reading `.nth(1).get_by_role("heading").first.inner_text()`
+  on one of those blocks for Playwright's **full 30s default** and takes the
+  whole call down with it.
+- **Only the first item is guaranteed rendered** when your "results are
+  ready" wait fires - later tiles fill in lazily. Waiting on `tiles.first`
+  and then iterating `tiles.all()` reads tiles that are still skeletons.
+- **Fix: bounded per-item read, skip on miss.** Give each item's key field a
+  short `wait_for` (a few seconds, not the 30s default), treat a timeout /
+  empty value as "not one of the things I want", and move on. Stop once you
+  have enough, and cap the total scanned. Distinguish "list didn't render"
+  (raise) from "rendered but nothing readable" (raise, but say the markup
+  drifted) from "found fewer than asked" (fine).
+
 ## Bot detection
 
 - **Akamai Bot Manager blocks *headless* Chromium specifically.** Headed
