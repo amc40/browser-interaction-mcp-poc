@@ -48,7 +48,9 @@ _SECURITY_HEADERS = {
         "connect-src 'self'; form-action 'self'; frame-ancestors 'none'"
     ),
     "Cache-Control": "no-store",
-    "Referrer-Policy": "no-referrer",
+    # same-origin, not no-referrer: under no-referrer some browsers also send
+    # `Origin: null` on same-origin form posts, which _same_origin would reject.
+    "Referrer-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
 }
@@ -135,9 +137,14 @@ def _same_origin(request: Request) -> bool:
     Compares hosts only, not scheme: TLS terminates at the tunnel edge and the
     last hop to the app is plain http, so ``request.url.scheme`` is ``http``
     while a browser's ``Origin`` on a legitimate same-site POST is ``https``.
+
+    A missing or ``null`` ``Origin`` is allowed: the ``SameSite=Strict`` session
+    cookie (checked alongside this) already guarantees a cross-site request
+    can't carry the credential, and some browsers send ``Origin: null`` even on
+    a legitimate same-origin form post.
     """
     origin = request.headers.get("origin")
-    if origin is None:
+    if origin is None or origin == "null":
         return True
     return urlsplit(origin).netloc == request.headers.get("host")
 
