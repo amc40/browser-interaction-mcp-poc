@@ -172,7 +172,7 @@ def _result(kind: str, glyph: str, status: LoginStatus) -> str:
     return (
         f'<div class="result {kind}">'
         f'<div class="badge" aria-hidden="true">{glyph}</div>'
-        f'<p id=detail>{html.escape(status.detail)}</p></div>'
+        f"<p id=detail>{html.escape(status.detail)}</p></div>"
     )
 
 
