@@ -22,13 +22,16 @@ things call it, for two different situations:
 - `scripts/sainsburys_login.py`, run locally, by hand, when the operator has
   a machine to run it from. Password and any OTP are read from the terminal
   (`getpass`, never echoed) and passed straight through.
-- The `sainsburys_refresh_session` MCP tool, for when they don't - a
-  Raspberry Pi behind a tunnel is the documented deployment target, and
-  "SSH in and run a script" isn't assumed to be routinely available there.
-  The tool gets the password (and OTP, if needed) via MCP *elicitation*
-  (`Context.elicit`) instead of a plain tool argument, specifically so the
-  value goes straight from the connecting client to the server and never
-  becomes part of the model's own context or transcript. See `tools.py`.
+- The `/sainsburys-login` browser page, for when they don't - a Raspberry Pi
+  behind a tunnel is the documented deployment target, and "SSH in and run a
+  script" isn't assumed to be routinely available there. The operator signs
+  in with GitHub, then types the password into a form served by this same
+  server: the value goes straight to the server over HTTPS, never through the
+  model or the transcript. The login runs in a subprocess that parks if a
+  verification code is asked for, so the operator can return to the page
+  minutes later with the code. See `login_routes.py` and
+  `sainsburys_login_flow.py`. (This replaced an MCP-elicitation tool, which
+  Claude.ai's MCP client turned out not to support.)
 
 Both are a real, deliberate narrowing of the "the server never sees a
 password" property `add_to_basket` and `products_we_love` still hold —
