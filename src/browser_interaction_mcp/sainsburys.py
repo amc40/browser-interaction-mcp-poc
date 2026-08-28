@@ -1,10 +1,10 @@
 """Browser actions against the Sainsbury's groceries site.
 
-Most of this module (`products_we_love`, `add_to_basket`) never touches a
-password: they either read a public page, or *reuse* a session someone else
-already established, via Playwright's `storage_state` - cookies and local
-storage, not credentials - handed to `browser.browser_page`. See
-`browser.browser_page`'s docstring for that mechanism and
+Most of this module (`products_we_love`, `search_products`, `add_to_basket`)
+never touches a password: they either read a public page, or *reuse* a
+session someone else already established, via Playwright's `storage_state` -
+cookies and local storage, not credentials - handed to `browser.browser_page`.
+See `browser.browser_page`'s docstring for that mechanism and
 `docs/deployment.md` §7 for why the captured session is worth protecting as
 carefully as the credentials it stands in for.
 
@@ -91,6 +91,7 @@ import contextlib
 import re
 import stat
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -100,7 +101,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from browser_interaction_mcp.browser import browser_page
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from playwright.sync_api import Locator, Page
@@ -189,6 +190,14 @@ class NotLoggedInError(RuntimeError):
     Either way the fix is the same - rerun the login script - so both raise
     this rather than being told apart.
     """
+
+
+@dataclass(frozen=True)
+class ProductMatch:
+    """One product tile read from a Sainsbury's search results page."""
+
+    name: str
+    image_url: str | None
 
 
 def _consent_cookies() -> list[dict[str, object]]:
@@ -323,13 +332,134 @@ def _check_logged_in(page: Page) -> None:
     )
 
 
-def add_to_basket(
+@contextlib.contextmanager
+def _authenticated_page(storage_state_path: Path) -> Iterator[Page]:
+    """Open a page in an already-authenticated Sainsbury's session.
+
+    Shared by every action below that needs to be logged in
+    (`search_products`, `add_to_basket`), so "how do we get an
+    authenticated page" has exactly one definition - the two callers can't
+    drift into checking that differently.
+
+    Raises:
+        NotLoggedInError: If the saved session is missing or not accepted.
+    """
+    with browser_page(
+        headless=False,
+        storage_state=storage_state_path,
+        cookies=_consent_cookies(),
+    ) as page:
+        with contextlib.suppress(PlaywrightTimeoutError):
+            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
+        _check_logged_in(page)
+        yield page
+
+
+def _run_search(page: Page, query: str) -> Locator:
+    """Type ``query`` into the site search and return the results' tiles.
+
+    Args:
+        page: An already-authenticated page - see `_check_logged_in`.
+        query: Search term, typed into the site's own search box exactly as
+            a person would.
+
+    Returns:
+        A locator matching every result tile, in the order the page lists
+        them.
+
+    Raises:
+        RuntimeError: If no results are found.
+    """
+    search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
+    search_box.click()
+    search_box.fill(query)
+    search_box.press("Enter")
+
+    tiles = page.locator(_PRODUCT_TILE_SELECTOR)
+    try:
+        _wait_for_page_to_settle(tiles.first)
+    except PlaywrightTimeoutError as exc:
+        msg = f"No search results found for {query!r}."
+        raise RuntimeError(msg) from exc
+    return tiles
+
+
+def search_products(
     query: str = DEFAULT_SEARCH_QUERY,
+    *,
+    storage_state_path: Path,
+    count: int = 5,
+) -> list[ProductMatch]:
+    """Search for ``query`` and return the top ``count`` results, unadded.
+
+    Read-only counterpart to `add_to_basket`, meant to be shown to a person -
+    e.g. as a Markdown list with the images inlined - so they can choose the
+    exact product name to pass to `add_to_basket`. An index into this list
+    isn't used for that instead because it can go stale between the two
+    calls (the site re-ranks or re-stocks between requests); a name naming
+    the specific product survives that.
+
+    Requires an already-authenticated session, for the same reason
+    `add_to_basket` does: only the logged-in results page has been verified
+    against a real recording - see the module docstring.
+
+    Args:
+        query: Search term, typed into the site's own search box exactly as
+            a person would. Defaults to a term verified against the real
+            site - see `DEFAULT_SEARCH_QUERY`.
+        storage_state_path: Path to a Playwright `storage_state` JSON file
+            holding a logged-in session, captured by
+            `scripts/sainsburys_login.py`.
+        count: How many results to return.
+
+    Returns:
+        Up to ``count`` matches, in the order the results page lists them.
+        `image_url` is best-effort - the tile's first `<img>`, unlike the
+        other selectors here hasn't been confirmed against a real recording -
+        and is `None` if the tile has no image or the image has no `src`.
+
+    Raises:
+        NotLoggedInError: If the saved session is missing or not accepted.
+        RuntimeError: If no results are found.
+    """
+    with _authenticated_page(storage_state_path) as page:
+        tiles = _run_search(page, query)
+        return [_product_match(tile) for tile in tiles.all()[:count]]
+
+
+def _product_match(tile: Locator) -> ProductMatch:
+    """Read one tile's product name and image - the one place either is read.
+
+    `add_to_basket`'s exact-match lookup reuses this for `name` rather than
+    re-deriving it, so a tile's name can't be read one way for display and
+    another way for matching.
+    """
+    name = tile.get_by_role("heading").first.inner_text().strip()
+    image = tile.locator("img").first
+    image_url = image.get_attribute("src") if image.count() > 0 else None
+    return ProductMatch(name=name, image_url=image_url)
+
+
+def _find_exact_match(tiles: Locator, product_name: str) -> Locator | None:
+    """Return the first tile whose product name exactly equals ``product_name``.
+
+    Matches on the same name `_product_match` would report for that tile -
+    see its docstring for why.
+    """
+    target = product_name.strip()
+    return next(
+        (tile for tile in tiles.all() if _product_match(tile).name == target),
+        None,
+    )
+
+
+def add_to_basket(
+    product_name: str,
     *,
     storage_state_path: Path,
     quantity: int = 1,
 ) -> str:
-    """Search for ``query`` and add its first result to the basket.
+    """Search for ``product_name`` and add the result matching it exactly.
 
     Requires an already-authenticated session - see the module docstring and
     `browser.browser_page`'s `storage_state` parameter. Mirrors a real,
@@ -339,10 +469,18 @@ def add_to_basket(
     end to end against a real, authenticated session - see the README's
     "Not done yet" section.
 
+    `product_name` must match a result's heading exactly (whitespace
+    trimmed) - typically one just returned by `search_products`. That's
+    deliberate rather than picking the first or an indexed result: an index
+    can go stale between a search and this call (the site re-ranks or
+    re-stocks in between), and blindly taking the first result can add the
+    wrong product for an ambiguous query. Naming the exact product avoids
+    both.
+
     Args:
-        query: Search term, typed into the site's own search box exactly as
-            a person would. Defaults to a term verified against the real
-            site - see `DEFAULT_SEARCH_QUERY`.
+        product_name: The product's name, exactly as shown on its search
+            result tile (e.g. from `search_products`). Also used, as-is, as
+            the search term.
         storage_state_path: Path to a Playwright `storage_state` JSON file
             holding a logged-in session, captured by
             `scripts/sainsburys_login.py`.
@@ -354,44 +492,33 @@ def add_to_basket(
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
-        RuntimeError: If no matching result, or no "add" control on it, is
-            found.
+        RuntimeError: If no results are found, none match `product_name`
+            exactly, or the matching result has no "add" control.
     """
-    with browser_page(
-        headless=False,
-        storage_state=storage_state_path,
-        cookies=_consent_cookies(),
-    ) as page:
-        with contextlib.suppress(PlaywrightTimeoutError):
-            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
-        _check_logged_in(page)
+    with _authenticated_page(storage_state_path) as page:
+        tiles = _run_search(page, product_name)
 
-        search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
-        search_box.click()
-        search_box.fill(query)
-        search_box.press("Enter")
-
-        tile = page.locator(_PRODUCT_TILE_SELECTOR).first
-        try:
-            _wait_for_page_to_settle(tile)
-        except PlaywrightTimeoutError as exc:
-            msg = f"No search results found for {query!r}."
-            raise RuntimeError(msg) from exc
-
-        product_name = tile.get_by_role("heading").first.inner_text().strip()
+        tile = _find_exact_match(tiles, product_name)
+        if tile is None:
+            msg = (
+                f"No search result exactly matches {product_name!r}. Call "
+                "search_products first and pass one of its product names "
+                "exactly, including capitalisation and punctuation."
+            )
+            raise RuntimeError(msg)
 
         add_button = tile.get_by_test_id(_ADD_BUTTON_TEST_ID)
         if add_button.count() == 0:
             msg = (
-                f'No "add" control found on the result for {query!r}. Either '
-                "the page has changed, or the product is unavailable."
+                f'No "add" control found on the result for {product_name!r}. '
+                "Either the page has changed, or the product is unavailable."
             )
             raise RuntimeError(msg)
 
         for _ in range(quantity):
             add_button.click(timeout=15_000)
 
-        return product_name
+        return product_name.strip()
 
 
 def refresh_session(

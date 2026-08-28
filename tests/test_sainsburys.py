@@ -39,6 +39,8 @@ class FakeLocator:
     pressed_keys: list[str] = field(default_factory=list)
     heading: FakeLocator | None = None
     add_button: FakeLocator | None = None
+    image_src: str | None = "https://example.invalid/product.jpg"
+    has_image: bool = True
 
     @property
     def first(self) -> FakeLocator:
@@ -89,6 +91,34 @@ class FakeLocator:
         assert test_id == sainsburys._ADD_BUTTON_TEST_ID, f"unexpected id {test_id!r}"
         return self.add_button if self.add_button is not None else FakeLocator(count_=0)
 
+    def locator(self, selector: str) -> FakeLocator:
+        """Return this tile's image, as `<img>`."""
+        assert selector == "img", f"unexpected selector {selector!r}"
+        return self if self.has_image else FakeLocator(count_=0)
+
+    def get_attribute(self, name: str) -> str | None:
+        """Return this (image) locator's pre-wired `src`."""
+        assert name == "src", f"unexpected attribute {name!r}"
+        return self.image_src
+
+
+@dataclass
+class _ProductTilesLocator:
+    """`page.locator(_PRODUCT_TILE_SELECTOR)`: every result tile, in order."""
+
+    tiles: list[FakeLocator]
+
+    @property
+    def first(self) -> FakeLocator:
+        """Return the first tile, or a locator that times out if there are none."""
+        if self.tiles:
+            return self.tiles[0]
+        return FakeLocator(count_=0, raises_on_wait=True)
+
+    def all(self) -> list[FakeLocator]:
+        """Return every tile, in document order."""
+        return self.tiles
+
 
 @dataclass
 class FakeBrowserContext:
@@ -113,11 +143,13 @@ class FakePage:
 
     headings: list[FakeLocator] = field(default_factory=list)
     search_box: FakeLocator = field(default_factory=FakeLocator)
-    product_tile: FakeLocator = field(
-        default_factory=lambda: FakeLocator(
-            heading=FakeLocator(text="A Product"),
-            add_button=FakeLocator(count_=1),
-        )
+    product_tiles: list[FakeLocator] = field(
+        default_factory=lambda: [
+            FakeLocator(
+                heading=FakeLocator(text="A Product"),
+                add_button=FakeLocator(count_=1),
+            )
+        ]
     )
     username_field: FakeLocator = field(default_factory=FakeLocator)
     password_field: FakeLocator = field(default_factory=FakeLocator)
@@ -164,12 +196,17 @@ class FakePage:
         msg = f"unexpected role {role!r}"
         raise AssertionError(msg)
 
-    def locator(self, selector: str) -> FakeLocator:
+    @property
+    def product_tile(self) -> FakeLocator:
+        """Return the first result tile, for tests that only care about one."""
+        return self.product_tiles[0]
+
+    def locator(self, selector: str) -> _ProductTilesLocator:
         """Return the locator for a CSS selector `sainsburys.py` uses."""
         assert selector == sainsburys._PRODUCT_TILE_SELECTOR, (
             f"unexpected selector {selector!r}"
         )
-        return self.product_tile
+        return _ProductTilesLocator(self.product_tiles)
 
     def get_by_test_id(self, test_id: str) -> FakeLocator:
         """Return the matching login-form field or button."""
@@ -340,40 +377,203 @@ def test_skips_a_heading_with_no_text(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# add_to_basket
+# search_products
 # ---------------------------------------------------------------------------
-def test_add_to_basket_searches_and_returns_the_first_results_product_name(
+def test_search_products_returns_names_and_image_urls_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     page = FakePage(
-        product_tile=FakeLocator(
-            heading=FakeLocator(text=" Fairy Lemon Washing Up Liquid "),
-            add_button=FakeLocator(count_=1),
-        )
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(text=" Fairy Lemon Washing Up Liquid "),
+                image_src="https://example.invalid/fairy.jpg",
+            ),
+            FakeLocator(
+                heading=FakeLocator(text="Ecover Washing Up Liquid"),
+                image_src="https://example.invalid/ecover.jpg",
+            ),
+        ]
     )
     _wire(monkeypatch, page)
 
-    result = sainsburys.add_to_basket(
+    results = sainsburys.search_products(
         "washing up liquid", storage_state_path=Path("session.json")
     )
 
-    assert result == "Fairy Lemon Washing Up Liquid"
-    assert page.goto_calls == [sainsburys.MY_ACCOUNT_URL]
+    assert results == [
+        sainsburys.ProductMatch(
+            name="Fairy Lemon Washing Up Liquid",
+            image_url="https://example.invalid/fairy.jpg",
+        ),
+        sainsburys.ProductMatch(
+            name="Ecover Washing Up Liquid",
+            image_url="https://example.invalid/ecover.jpg",
+        ),
+    ]
     assert page.search_box.filled == "washing up liquid"
     assert page.search_box.pressed_keys == ["Enter"]
-    assert page.product_tile.add_button is not None
-    assert page.product_tile.add_button.clicked
 
 
-def test_add_to_basket_uses_the_default_query_when_none_is_given(
+def test_search_products_honours_a_smaller_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="A")),
+            FakeLocator(heading=FakeLocator(text="B")),
+            FakeLocator(heading=FakeLocator(text="C")),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    results = sainsburys.search_products(
+        storage_state_path=Path("session.json"), count=2
+    )
+
+    assert [match.name for match in results] == ["A", "B"]
+
+
+def test_search_products_uses_the_default_query_when_none_is_given(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     page = FakePage()
     _wire(monkeypatch, page)
 
-    sainsburys.add_to_basket(storage_state_path=Path("session.json"))
+    sainsburys.search_products(storage_state_path=Path("session.json"))
 
     assert page.search_box.filled == sainsburys.DEFAULT_SEARCH_QUERY
+
+
+def test_search_products_reports_no_image_when_the_tile_has_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="No Photo Product"), has_image=False),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    results = sainsburys.search_products(storage_state_path=Path("session.json"))
+
+    assert results == [sainsburys.ProductMatch(name="No Photo Product", image_url=None)]
+
+
+def test_search_products_raises_when_redirected_to_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(username_field=FakeLocator(visible=True))
+    _wire(monkeypatch, page)
+
+    with pytest.raises(sainsburys.NotLoggedInError, match=r"sainsburys_login\.py"):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
+
+    assert not page.search_box.filled
+
+
+def test_search_products_raises_when_no_results_are_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(product_tiles=[])
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="No search results"):
+        sainsburys.search_products(
+            "a nonexistent product", storage_state_path=Path("session.json")
+        )
+
+
+# ---------------------------------------------------------------------------
+# add_to_basket
+# ---------------------------------------------------------------------------
+def test_add_to_basket_searches_and_adds_the_exact_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(text=" Fairy Lemon Washing Up Liquid "),
+                add_button=FakeLocator(count_=1),
+            )
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    result = sainsburys.add_to_basket(
+        "Fairy Lemon Washing Up Liquid", storage_state_path=Path("session.json")
+    )
+
+    assert result == "Fairy Lemon Washing Up Liquid"
+    assert page.goto_calls == [sainsburys.MY_ACCOUNT_URL]
+    assert page.search_box.filled == "Fairy Lemon Washing Up Liquid"
+    assert page.search_box.pressed_keys == ["Enter"]
+    assert page.product_tile.add_button is not None
+    assert page.product_tile.add_button.clicked
+
+
+def test_add_to_basket_ignores_surrounding_whitespace_on_the_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(text="Fairy Lemon Washing Up Liquid"),
+                add_button=FakeLocator(count_=1),
+            )
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    result = sainsburys.add_to_basket(
+        "  Fairy Lemon Washing Up Liquid  ", storage_state_path=Path("session.json")
+    )
+
+    assert result == "Fairy Lemon Washing Up Liquid"
+    assert page.product_tile.add_button is not None
+    assert page.product_tile.add_button.clicked
+
+
+def test_add_to_basket_picks_the_matching_tile_among_several_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wanted_add_button = FakeLocator(count_=1)
+    other_add_button = FakeLocator(count_=1)
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(text="Ecover Washing Up Liquid"),
+                add_button=other_add_button,
+            ),
+            FakeLocator(
+                heading=FakeLocator(text="Fairy Lemon Washing Up Liquid"),
+                add_button=wanted_add_button,
+            ),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    sainsburys.add_to_basket(
+        "Fairy Lemon Washing Up Liquid", storage_state_path=Path("session.json")
+    )
+
+    assert wanted_add_button.clicked
+    assert not other_add_button.clicked
+
+
+def test_add_to_basket_raises_when_no_result_matches_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="Ecover Washing Up Liquid"))
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="No search result exactly matches"):
+        sainsburys.add_to_basket(
+            "Fairy Lemon Washing Up Liquid", storage_state_path=Path("session.json")
+        )
 
 
 def test_add_to_basket_passes_the_storage_state_path_to_browser_page(
@@ -383,7 +583,7 @@ def test_add_to_basket_passes_the_storage_state_path_to_browser_page(
     storage_states: list[object] = []
     _wire(monkeypatch, page, storage_states=storage_states)
 
-    sainsburys.add_to_basket(storage_state_path=Path("session.json"))
+    sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
 
     assert storage_states == [Path("session.json")]
 
@@ -394,7 +594,9 @@ def test_add_to_basket_clicks_add_once_per_unit_of_quantity(
     page = FakePage()
     _wire(monkeypatch, page)
 
-    sainsburys.add_to_basket(storage_state_path=Path("session.json"), quantity=3)
+    sainsburys.add_to_basket(
+        "A Product", storage_state_path=Path("session.json"), quantity=3
+    )
 
     assert page.product_tile.add_button is not None
     assert page.product_tile.add_button.click_count == 3
@@ -407,7 +609,7 @@ def test_add_to_basket_seeds_consent_cookies(
     cookies_seen: list[Any] = []
     _wire(monkeypatch, page, cookies_seen=cookies_seen)
 
-    sainsburys.add_to_basket(storage_state_path=Path("session.json"))
+    sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
 
     assert any(c["name"] == "OptanonConsent" for c in cookies_seen[0])
 
@@ -419,7 +621,7 @@ def test_add_to_basket_raises_when_redirected_to_login(
     _wire(monkeypatch, page)
 
     with pytest.raises(sainsburys.NotLoggedInError, match=r"sainsburys_login\.py"):
-        sainsburys.add_to_basket(storage_state_path=Path("session.json"))
+        sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
 
     assert not page.search_box.filled
 
@@ -427,7 +629,7 @@ def test_add_to_basket_raises_when_redirected_to_login(
 def test_add_to_basket_raises_when_no_results_are_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(product_tile=FakeLocator(count_=0, raises_on_wait=True))
+    page = FakePage(product_tiles=[])
     _wire(monkeypatch, page)
 
     with pytest.raises(RuntimeError, match="No search results"):
@@ -440,15 +642,17 @@ def test_add_to_basket_raises_when_the_result_has_no_add_control(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     page = FakePage(
-        product_tile=FakeLocator(
-            heading=FakeLocator(text="A Product"),
-            add_button=FakeLocator(count_=0),
-        )
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(text="A Product"),
+                add_button=FakeLocator(count_=0),
+            )
+        ]
     )
     _wire(monkeypatch, page)
 
     with pytest.raises(RuntimeError, match='"add" control'):
-        sainsburys.add_to_basket(storage_state_path=Path("session.json"))
+        sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
 
 
 # ---------------------------------------------------------------------------

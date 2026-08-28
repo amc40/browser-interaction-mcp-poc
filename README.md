@@ -67,6 +67,19 @@ straight from its search-result tile (`data-testid="add-button"`) rather than
 needing to open the product's own page first. See `sainsburys.py`'s module
 docstring for the detail.
 
+`sainsburys_add_to_basket` no longer blindly adds a search's first result: it
+requires an exact `product_name`, matched against a result tile's heading
+(whitespace aside), and raises rather than guess if nothing matches. A third
+tool, `sainsburys_search`, exists to produce that name - a read-only search
+that returns the top 5 matches' names and image URLs, for the model to show
+the person as a Markdown list with the images inlined so they can pick before
+anything is added. An index into that list isn't accepted instead, because it
+can go stale between the two calls (the site can re-rank or re-stock in
+between) in a way a name can't. Both tools share the same
+"authenticate, run the search, read a tile's name" code (`sainsburys.py`'s
+`_authenticated_page`, `_run_search`, `_product_match`) so they can't drift
+into disagreeing about what a given search actually returns.
+
 **`sainsburys_add_to_basket` is still unverified end to end.** Its selectors
 are drawn from a real recording rather than invented, but nobody has run it
 against a real, authenticated session yet - that needs credentials this
@@ -197,6 +210,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/site-automation-gotchas.md` | Failure patterns found driving the real site, for when this generalises |
 | `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
 | `scripts/sainsburys_login.py` | Run locally, by hand, with your own credentials: logs in to Sainsbury's for real and captures the session `add_to_basket` replays |
+| `scripts/sainsburys_search.py` | CLI wrapper to run `sainsburys_search` directly, for validating it against the real page once a session exists |
 | `scripts/sainsburys_add_to_basket.py` | CLI wrapper to run `sainsburys_add_to_basket` directly, for validating it against the real page once a session exists |
 
 ### Adding a browser action

@@ -20,6 +20,8 @@ from pydantic import BaseModel, Field
 from browser_interaction_mcp import sainsburys
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from fastmcp import FastMCP
 
     from browser_interaction_mcp.settings import Settings
@@ -43,6 +45,25 @@ class ProductsWeLove(BaseModel):
 
     products: list[str] = Field(
         description='Product names, in the order shown under "Products we love".',
+    )
+
+
+class ProductSearchResult(BaseModel):
+    """One product returned by a Sainsbury's search, unadded."""
+
+    name: str = Field(description="Product name, exactly as shown on its result tile.")
+    image_url: str | None = Field(
+        description=(
+            "URL of the product's image, if one could be read from its result tile."
+        ),
+    )
+
+
+class ProductSearchResults(BaseModel):
+    """The top matches for a Sainsbury's search, for a caller to choose from."""
+
+    results: list[ProductSearchResult] = Field(
+        description="Matches, in the order Sainsbury's results page lists them.",
     )
 
 
@@ -73,6 +94,19 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
             rate_limit_burst=settings.rate_limit_burst,
         )
 
+    def _require_storage_state() -> Path:
+        """Return the configured session path, or raise if none is usable."""
+        storage_state_path = settings.sainsburys_storage_state_path
+        if storage_state_path is None or not storage_state_path.is_file():
+            msg = (
+                "No saved Sainsbury's session. Run scripts/sainsburys_login.py "
+                "locally, or visit /sainsburys-login on this server to sign in, "
+                "then point BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH at the file "
+                "it writes."
+            )
+            raise sainsburys.NotLoggedInError(msg)
+        return storage_state_path
+
     # Add browser actions below, one function per action. Keep each one
     # deterministic and parameterised only by values you validate here.
 
@@ -88,20 +122,56 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         return ProductsWeLove(products=sainsburys.products_we_love())
 
     @mcp.tool(
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+    )
+    def sainsburys_search(
+        query: str = sainsburys.DEFAULT_SEARCH_QUERY,
+    ) -> ProductSearchResults:
+        """Search Sainsbury's and return the top 5 matches, without adding any.
+
+        Nothing is added to the basket - call this first to see what a
+        query actually matches, then pass one result's `name` *exactly* to
+        `sainsburys_add_to_basket`. Present the results to the person as a
+        Markdown list with each `image_url` inlined
+        (`![name](image_url)`) so they can see titles and pictures before
+        choosing, rather than picking on their behalf.
+
+        `query` is only ever typed into Sainsbury's own site search, exactly
+        as a person would - it cannot reach a page, selector or script this
+        server hasn't approved in code.
+
+        Needs an already-authenticated Sainsbury's session - see
+        `sainsburys_add_to_basket`'s docstring for how to capture one.
+        """
+        product_matches = sainsburys.search_products(
+            query, storage_state_path=_require_storage_state()
+        )
+        return ProductSearchResults(
+            results=[
+                ProductSearchResult(name=match.name, image_url=match.image_url)
+                for match in product_matches
+            ],
+        )
+
+    @mcp.tool(
         annotations={
             "readOnlyHint": False,
             "destructiveHint": False,
             "openWorldHint": True,
         },
     )
-    def sainsburys_add_to_basket(
-        query: str = sainsburys.DEFAULT_SEARCH_QUERY,
-    ) -> AddedToBasket:
-        """Search Sainsbury's and add the first result to the basket.
+    def sainsburys_add_to_basket(product_name: str) -> AddedToBasket:
+        """Search Sainsbury's for `product_name` and add the exact match.
 
-        `query` is only ever typed into Sainsbury's own site search, exactly
-        as a person would - it cannot reach a page, selector or script this
-        server hasn't approved in code.
+        `product_name` must be the exact name of one of `sainsburys_search`'s
+        results (whitespace aside) - not a description, not an index. An
+        index isn't accepted because it can go stale between the two calls
+        (the site can re-rank or re-stock in between); the exact name can't.
+        Call `sainsburys_search` first if you don't already have one.
+
+        `product_name` is only ever typed into Sainsbury's own site search,
+        exactly as a person would - it cannot reach a page, selector or
+        script this server hasn't approved in code.
 
         Needs an already-authenticated Sainsbury's session. Capture one by
         running `scripts/sainsburys_login.py` locally, or - on a deployed
@@ -111,15 +181,7 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         it only replays a captured session, and raises if none is set up or
         the saved one is no longer accepted.
         """
-        storage_state_path = settings.sainsburys_storage_state_path
-        if storage_state_path is None or not storage_state_path.is_file():
-            msg = (
-                "No saved Sainsbury's session. Run scripts/sainsburys_login.py "
-                "locally, or visit /sainsburys-login on this server to sign in, "
-                "then point BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH at the file "
-                "it writes."
-            )
-            raise sainsburys.NotLoggedInError(msg)
-
-        product = sainsburys.add_to_basket(query, storage_state_path=storage_state_path)
+        product = sainsburys.add_to_basket(
+            product_name, storage_state_path=_require_storage_state()
+        )
         return AddedToBasket(product=product)
