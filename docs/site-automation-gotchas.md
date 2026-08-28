@@ -39,11 +39,22 @@ hard way. Each is a pattern, not a one-off.
   `account.sainsburys.co.uk/gol/login?login_challenge=...` (an Ory-style IdP).
   `goto(LOGIN_URL)` and then immediately filling fields races the redirect -
   wait for the actual form (`get_by_test_id("username")`) to be visible first.
-- **Decide "logged in?" by an element, never by the URL.** These SPAs redirect
-  *through* login-shaped URLs even on the **success** path - visiting an
-  account page triggers a silent session check that passes through
-  `/gol/login` before landing. A URL match ("am I on /gol/login?") gives false
-  failures. Check whether the login *form* is actually on screen.
+- **Decide "logged in?" by *waiting for* the URL to settle - not by sampling
+  it, and not by an on-page element.** These SPAs redirect *through*
+  login-shaped URLs even on the **success** path (an account page runs a
+  silent session check that passes through `/gol/login` before landing), so a
+  one-shot URL check gives false failures. But the account page also paints
+  its full chrome - header, search box, everything - *before* that check
+  runs, so "is the logged-in UI on screen?" gives false **passes** on a dead
+  session, which then blow up on the next interaction. What works:
+  `page.wait_for_url(<logged-in path regex>, timeout=~20s)` after the `goto`,
+  then treat "still not on a logged-in URL" as logged out. A live session
+  lands back under `/gol-ui/`; a dead one stays on the IdP's `/gol/login`.
+- **Belt-and-braces: catch the mid-action redirect too.** If the session
+  lapses just after that check, the next `fill`/`click` triggers the bounce
+  to login and times out 30s later with an opaque Playwright error. Wrap the
+  action, and on a timeout re-check the URL - if it's the login page, raise
+  the "session expired" error instead of a generic one.
 - **Same for MFA.** Detect the step by the verification-code field appearing,
   not by a `/mfa` URL fragment.
 - **Wait after every form submit that navigates**, including the OTP submit -

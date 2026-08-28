@@ -46,10 +46,13 @@ showed, and isn't obvious from the public pages alone:
 
 - `www.sainsburys.co.uk/gol-ui/oauth/login` is only a redirect shell now: it
   bounces to the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...`
-  (an Ory-style identity provider). It redirects through login-shaped URLs
-  even on the *success* path (a silent session check on the way to an account
-  page), so `refresh_session` decides "logged in or not" by whether the login
-  *form* is on screen, never by the URL.
+  (an Ory-style identity provider). Both the account page and the login flow
+  redirect through login-shaped URLs even on the *success* path (a silent
+  session check on the way to an account page), so "logged in or not" is
+  decided by *waiting for* the page to settle back under `/gol-ui/` rather
+  than sampling the URL once - see `_raise_if_not_logged_in`. The account
+  page's own header renders before that check runs, so on-page elements can't
+  tell the two apart.
 - The consent banner is OneTrust, injected asynchronously *after* the load
   event, with a full-page backdrop that blocks every click until it's
   actioned. Rather than race to dismiss it, `_consent_cookies` seeds the
@@ -131,50 +134,47 @@ _NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE
 # `www.sainsburys.co.uk/gol-ui/oauth/login` is only a shell now: it bounces to
 # the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...` (an
 # Ory-style identity provider). MFA, when Sainsbury's asks for it, is a further
-# step there. Both are detected by the elements they render, not their URL:
-# these SPAs redirect through login-shaped URLs even on the *success* path (a
-# silent session check), so a URL match gives false failures.
+# step there, detected by the verification-code field it renders.
 LOGIN_URL = "https://www.sainsburys.co.uk/gol-ui/oauth/login"
 
 
-# How long `_raise_if_not_logged_in` waits for the page to land on a definite
-# outcome, and how often it re-checks. A dead session's redirect to the real
-# login form can take several seconds; a single fixed pause was checking before
-# it landed, so an expired session slipped through here and only failed later,
-# on the first real interaction, as an opaque Playwright timeout instead of an
-# actionable "log in again".
-_SETTLE_POLL_MS = 500
-_SETTLE_TIMEOUT_MS = 20_000
-_SETTLE_CHECKS = _SETTLE_TIMEOUT_MS // _SETTLE_POLL_MS
+# The logged-in groceries SPA lives under www.sainsburys.co.uk/gol-ui/; a
+# session Sainsbury's no longer accepts is bounced to the identity provider on
+# account.sainsburys.co.uk (/login-init, then /gol/login) and kept there. The
+# account page paints its own header - search box included - *before* it
+# silently checks the session, so no on-page element tells the two apart; the
+# URL the page settles on does.
+_LOGGED_IN_URL = re.compile(r"https://www\.sainsburys\.co\.uk/gol-ui/")
+_IDP_LOGIN_URL = re.compile(
+    r"https://account\.sainsburys\.co\.uk/(gol/login|login-init)"
+)
+
+# Long enough for the account page's silent session check and its redirect to
+# complete on a slow connection before we decide the session is dead.
+_AUTH_SETTLE_TIMEOUT_MS = 20_000
+
+_SESSION_INVALID_MESSAGE = (
+    "The saved Sainsbury's session is no longer valid - it has expired, or the "
+    "account was signed out elsewhere. Ask the operator to re-authenticate by "
+    "opening /sainsburys-login on this server and signing in (or, running "
+    "locally, by rerunning scripts/sainsburys_login.py), then try again."
+)
 
 
 def _raise_if_not_logged_in(
     page: Page, message: str, *, screenshot_path: Path | None = None
 ) -> None:
-    """Raise ``NotLoggedInError`` if the page settled on the login form.
+    """Raise ``NotLoggedInError`` unless the page settled on a logged-in URL.
 
-    Waits for the page to settle on one of two outcomes - the logged-in site
-    header (its search box) or the login form - rather than deciding after a
-    fixed pause that can check too early. Reads the elements, never the URL: a
-    *successful* visit to an account page bounces back through the identity
-    provider's ``/gol/login`` URL for a silent session check, so a URL match
-    on its own gives false failures.
+    Waits for the page to land back under ``www.sainsburys.co.uk/gol-ui/``
+    (which a live session does, even after bouncing through the identity
+    provider for a silent check) and treats staying on the provider's login
+    URL as the session being gone. The account page's header renders either
+    way, so the URL is the only reliable signal - see `_LOGGED_IN_URL`.
     """
     with contextlib.suppress(PlaywrightTimeoutError):
-        page.wait_for_load_state("domcontentloaded", timeout=15_000)
-
-    login_form = page.get_by_test_id(_USERNAME_TEST_ID)
-    signed_in = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
-    for _ in range(_SETTLE_CHECKS):
-        if login_form.is_visible():
-            break
-        if signed_in.is_visible():
-            return
-        page.wait_for_timeout(_SETTLE_POLL_MS)
-    else:
-        # Neither outcome within the timeout: fall back to the prior behaviour
-        # of treating "no login form" as logged in. A genuinely broken page
-        # then fails downstream with its own, more specific error.
+        page.wait_for_url(_LOGGED_IN_URL, timeout=_AUTH_SETTLE_TIMEOUT_MS)
+    if _LOGGED_IN_URL.search(page.url):
         return
 
     if screenshot_path is not None:
@@ -345,16 +345,7 @@ def _check_logged_in(page: Page) -> None:
             the session in `storage_state` is missing, expired, or was
             never authenticated to begin with.
     """
-    _raise_if_not_logged_in(
-        page,
-        (
-            "The saved Sainsbury's session is no longer valid - it has expired, "
-            "or the account was signed out elsewhere. Ask the operator to "
-            "re-authenticate by opening /sainsburys-login on this server and "
-            "signing in (or, running locally, by rerunning "
-            "scripts/sainsburys_login.py), then try again."
-        ),
-    )
+    _raise_if_not_logged_in(page, _SESSION_INVALID_MESSAGE)
 
 
 @contextlib.contextmanager
@@ -375,7 +366,7 @@ def _authenticated_page(storage_state_path: Path) -> Iterator[Page]:
         cookies=_consent_cookies(),
     ) as page:
         with contextlib.suppress(PlaywrightTimeoutError):
-            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
+            page.goto(MY_ACCOUNT_URL, wait_until="domcontentloaded", timeout=25_000)
         _check_logged_in(page)
         yield page
 
@@ -393,17 +384,23 @@ def _run_search(page: Page, query: str) -> Locator:
         them.
 
     Raises:
+        NotLoggedInError: If the session lapsed between the check in
+            `_authenticated_page` and here, bouncing the page to login.
         RuntimeError: If no results are found.
     """
-    search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
-    search_box.click()
-    search_box.fill(query)
-    search_box.press("Enter")
-
     tiles = page.locator(_PRODUCT_TILE_SELECTOR)
     try:
+        search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
+        search_box.click()
+        search_box.fill(query)
+        search_box.press("Enter")
         _wait_for_page_to_settle(tiles.first)
     except PlaywrightTimeoutError as exc:
+        # A session that lapsed just after the check in `_authenticated_page`
+        # redirects the page to the identity provider mid-search; say so,
+        # rather than reporting it as an empty result set.
+        if _IDP_LOGIN_URL.search(page.url):
+            raise NotLoggedInError(_SESSION_INVALID_MESSAGE) from exc
         msg = f"No search results found for {query!r}."
         raise RuntimeError(msg) from exc
     return tiles
@@ -662,7 +659,7 @@ def refresh_session(
             page.wait_for_load_state("domcontentloaded", timeout=30_000)
 
         with contextlib.suppress(PlaywrightTimeoutError):
-            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
+            page.goto(MY_ACCOUNT_URL, wait_until="domcontentloaded", timeout=25_000)
         _raise_if_not_logged_in(
             page,
             "Still not logged in after submitting the login form (and any "

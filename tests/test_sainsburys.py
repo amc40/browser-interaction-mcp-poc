@@ -22,7 +22,12 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from browser_interaction_mcp import sainsburys
 
 if TYPE_CHECKING:
+    import re
     from collections.abc import Iterator
+
+# What `page.url` reads as once a dead session has been bounced to the identity
+# provider - the signal `_raise_if_not_logged_in` keys off.
+_LOGIN_URL = "https://account.sainsburys.co.uk/gol/login?login_challenge=abc123"
 
 
 @dataclass
@@ -35,11 +40,6 @@ class FakeLocator:
     click_count: int = 0
     raises_on_wait: bool = False
     visible: bool = False
-    # Flip to visible once `is_visible` has been asked this many times - lets a
-    # test model an element that only appears after a poll or two (a login-page
-    # redirect that hasn't landed yet).
-    visible_after_checks: int = 0
-    _visibility_checks: int = field(default=0, init=False)
     filled: str | None = None
     pressed_keys: list[str] = field(default_factory=list)
     heading: FakeLocator | None = None
@@ -82,13 +82,8 @@ class FakeLocator:
             raise PlaywrightTimeoutError(msg)
 
     def is_visible(self) -> bool:
-        """Return the pre-wired visibility, honouring `visible_after_checks`."""
-        self._visibility_checks += 1
-        appeared_late = (
-            self.visible_after_checks > 0
-            and self._visibility_checks > self.visible_after_checks
-        )
-        return self.visible or appeared_late
+        """Return the pre-wired visibility."""
+        return self.visible
 
     def get_by_role(self, role: str, *, name: object = None) -> FakeLocator:
         """Return this tile's product-name heading."""
@@ -152,9 +147,7 @@ class FakePage:
     """A page that only knows the lookups `sainsburys.py` performs."""
 
     headings: list[FakeLocator] = field(default_factory=list)
-    # Visible by default: it lives in the logged-in site header, and its
-    # presence is how `_raise_if_not_logged_in` confirms a session is still good.
-    search_box: FakeLocator = field(default_factory=lambda: FakeLocator(visible=True))
+    search_box: FakeLocator = field(default_factory=FakeLocator)
     product_tiles: list[FakeLocator] = field(
         default_factory=lambda: [
             FakeLocator(
@@ -191,6 +184,13 @@ class FakePage:
     def wait_for_timeout(self, timeout: int) -> None:
         """No-op: no real clock to wait on."""
         del timeout
+
+    def wait_for_url(self, url: re.Pattern[str], *, timeout: int | None = None) -> None:
+        """Match the fake's fixed `url`, or 'time out' if it doesn't match."""
+        del timeout
+        if not url.search(self.url):
+            msg = f"Timeout waiting for URL matching {url.pattern!r}"
+            raise PlaywrightTimeoutError(msg)
 
     def screenshot(self, *, path: object) -> None:
         """Record that a debug screenshot was requested."""
@@ -471,28 +471,13 @@ def test_search_products_reports_no_image_when_the_tile_has_none(
     assert results == [sainsburys.ProductMatch(name="No Photo Product", image_url=None)]
 
 
-def test_search_products_raises_when_redirected_to_login(
+def test_search_products_raises_when_the_page_stays_on_the_login_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(username_field=FakeLocator(visible=True))
-    _wire(monkeypatch, page)
-
-    with pytest.raises(sainsburys.NotLoggedInError, match=r"sainsburys_login\.py"):
-        sainsburys.search_products(storage_state_path=Path("session.json"))
-
-    assert not page.search_box.filled
-
-
-def test_search_products_waits_for_a_slow_login_redirect_before_deciding(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The bug this guards: the bounce to the login form hadn't landed at the
-    # first check, so an expired session slipped through and only failed later,
-    # mid-search, as an opaque timeout. The settle loop must poll for it.
-    page = FakePage(
-        search_box=FakeLocator(visible=False),
-        username_field=FakeLocator(visible_after_checks=2),
-    )
+    # A dead session's silent check bounces MY_ACCOUNT_URL to the identity
+    # provider and keeps it there - the account page's own header still
+    # renders, so the URL is the only tell.
+    page = FakePage(url=_LOGIN_URL)
     _wire(monkeypatch, page)
 
     with pytest.raises(sainsburys.NotLoggedInError, match="re-authenticate"):
@@ -501,17 +486,20 @@ def test_search_products_waits_for_a_slow_login_redirect_before_deciding(
     assert not page.search_box.filled
 
 
-def test_search_products_proceeds_when_the_page_never_settles(
+def test_search_products_raises_when_the_session_lapses_mid_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Neither the login form nor the header search box within the timeout: keep
-    # the prior behaviour of assuming logged in rather than erroring outright.
-    page = FakePage(search_box=FakeLocator(visible=False))
+    # The check passed, then the search's own navigation bounced the page to
+    # login: surface that as "re-authenticate", not "no results".
+    page = FakePage(
+        url=_LOGIN_URL,
+        product_tiles=[],  # the settle wait times out on the login page
+    )
+    monkeypatch.setattr(sainsburys, "_check_logged_in", lambda _page: None)
     _wire(monkeypatch, page)
 
-    results = sainsburys.search_products(storage_state_path=Path("session.json"))
-
-    assert [match.name for match in results] == ["A Product"]
+    with pytest.raises(sainsburys.NotLoggedInError, match="re-authenticate"):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
 
 
 def test_search_products_raises_when_no_results_are_found(
@@ -734,10 +722,10 @@ def test_add_to_basket_seeds_consent_cookies(
 def test_add_to_basket_raises_when_redirected_to_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(username_field=FakeLocator(visible=True))
+    page = FakePage(url=_LOGIN_URL)
     _wire(monkeypatch, page)
 
-    with pytest.raises(sainsburys.NotLoggedInError, match=r"sainsburys_login\.py"):
+    with pytest.raises(sainsburys.NotLoggedInError, match="re-authenticate"):
         sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
 
     assert not page.search_box.filled
@@ -886,7 +874,7 @@ def test_refresh_session_raises_when_still_not_logged_in_afterwards(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    page = FakePage(username_field=FakeLocator(visible=True))
+    page = FakePage(url=_LOGIN_URL)
     _wire(monkeypatch, page)
     shot = tmp_path / "failure.png"
 
