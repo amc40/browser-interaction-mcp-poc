@@ -11,11 +11,14 @@ from fastmcp.server.middleware.authorization import AuthMiddleware
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 
 from browser_interaction_mcp.auth import build_auth_provider, github_user_id_is
+from browser_interaction_mcp.login_oauth import BrowserGithubAuth
+from browser_interaction_mcp.login_routes import register_login_routes
 from browser_interaction_mcp.middleware import (
     SecretRedactionMiddleware,
     ToolCallRateLimitingMiddleware,
 )
 from browser_interaction_mcp.redaction import build_redactor
+from browser_interaction_mcp.sainsburys_login_flow import SainsburysLoginFlow
 from browser_interaction_mcp.settings import Settings
 from browser_interaction_mcp.tools import register_tools
 
@@ -87,4 +90,25 @@ def build_server(settings: Settings | None = None) -> FastMCP:
     )
 
     register_tools(mcp, settings=settings, version=_installed_version())
+    _maybe_register_login_page(mcp, settings)
     return mcp
+
+
+def _maybe_register_login_page(mcp: FastMCP, settings: Settings) -> None:
+    """Add the out-of-band Sainsbury's login page when it can be served.
+
+    It needs the http transport (for the GitHub OAuth app credentials and a
+    public URL) and both Sainsbury's settings. On stdio, or before those are
+    configured, there is nothing to serve.
+    """
+    if (
+        settings.transport != "http"
+        or settings.sainsburys_username is None
+        or settings.sainsburys_storage_state_path is None
+    ):
+        return
+    flow = SainsburysLoginFlow(
+        username=settings.sainsburys_username.get_secret_value(),
+        storage_state_path=settings.sainsburys_storage_state_path,
+    )
+    register_login_routes(mcp, flow, BrowserGithubAuth(settings))

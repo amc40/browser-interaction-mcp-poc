@@ -3,9 +3,9 @@
 
 For `browser_interaction_mcp.sainsburys.add_to_basket` and anything else that
 needs to act as a signed-in Sainsbury's account. Thin CLI wrapper around
-`sainsburys.refresh_session` - the same function the `sainsburys_refresh_session`
-MCP tool calls, for when there's no way to run a script like this one at all
-(e.g. no routine shell access to wherever the server is deployed). See that
+`sainsburys.refresh_session` - the same function the `/sainsburys-login`
+browser page drives, for when there's no way to run a script like this one at
+all (e.g. no routine shell access to wherever the server is deployed). See that
 function's docstring, and `sainsburys.py`'s module docstring, for what it
 means that this project's one login flow handles a password.
 
