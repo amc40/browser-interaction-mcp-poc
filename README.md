@@ -128,6 +128,13 @@ clients run a normal GitHub OAuth flow, and the resulting token is verified
 against the GitHub API. Authorisation is a one-function check comparing the
 token's `sub` claim to `BROWSER_MCP_GITHUB_USER_ID`.
 
+The OAuth app requests no scopes. `sub` and `login` come from the token's own
+`/user` claims, and GitHub hands those back for any authenticated caller
+regardless of what scope, if any, was granted — they're the account's own
+public profile, not scoped data. `GitHubProvider` defaults to requesting the
+`user` scope (full read/write access to the profile), which this server never
+needed, so it's overridden to `[]`.
+
 That setting is a numeric GitHub user ID rather than a login, because logins can
 be changed and a login freed by a rename can be registered by somebody else. Find
 one at `https://api.github.com/users/<login>`; it defaults to the repository
