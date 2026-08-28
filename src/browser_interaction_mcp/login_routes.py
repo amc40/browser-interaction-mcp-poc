@@ -62,6 +62,30 @@ _STYLE = (
     "input{font-size:1rem;padding:.5rem;width:100%;box-sizing:border-box}"
     "button{font-size:1rem;padding:.5rem 1rem;margin-top:1rem;cursor:pointer}"
     ".muted{color:#555}.err{color:#b00020}"
+    # Stage-of-flow stepper, shown while an attempt is still in progress.
+    ".stepper{display:flex;justify-content:space-between;margin:0 0 1.75rem;"
+    "position:relative}"
+    ".stepper::before{content:'';position:absolute;top:.9rem;left:1.8rem;"
+    "right:1.8rem;height:2px;background:#ddd;z-index:0}"
+    ".step{display:flex;flex-direction:column;align-items:center;gap:.4rem;"
+    "flex:1;position:relative;z-index:1}"
+    ".step .dot{width:1.8rem;height:1.8rem;border-radius:50%;display:flex;"
+    "align-items:center;justify-content:center;font-size:.85rem;font-weight:600;"
+    "background:#fff;border:2px solid #ccc;color:#999}"
+    ".step .label{font-size:.7rem;color:#777;text-align:center}"
+    ".step.done .dot{background:#1a7f37;border-color:#1a7f37;color:#fff}"
+    ".step.done .label{color:#1a7f37}"
+    ".step.active .dot{border-color:#0552b5;color:#0552b5}"
+    ".step.active .label{color:#0552b5;font-weight:600}"
+    # Big pass/fail marker, shown once an attempt has finished.
+    ".result{display:flex;flex-direction:column;align-items:center;gap:.75rem;"
+    "margin:1rem 0 1.75rem}"
+    ".result .badge{width:3.5rem;height:3.5rem;border-radius:50%;display:flex;"
+    "align-items:center;justify-content:center;font-size:1.8rem;color:#fff;"
+    "flex-shrink:0}"
+    ".result.ok .badge{background:#1a7f37}"
+    ".result.err .badge{background:#b00020}"
+    ".result p{margin:0;text-align:center}"
 )
 
 _PASSWORD_FORM = (
@@ -113,22 +137,75 @@ def _detail(status: LoginStatus, css_class: str) -> str:
     return f'<p class="{css_class}" id=detail>{html.escape(status.detail)}</p>'
 
 
+#: The stages an attempt visibly passes through, in order. Verification code
+#: isn't always asked for, but showing it up front - rather than only once
+#: Sainsbury's actually asks - is what makes the current stage legible at a
+#: glance instead of a surprise.
+_STEPS = (
+    (LoginState.AWAITING_PASSWORD, "Password"),
+    (LoginState.LOGGING_IN, "Signing in"),
+    (LoginState.AWAITING_OTP, "Verification code"),
+)
+
+
+def _stepper(current: LoginState) -> str:
+    """Render the 3-stage progress stepper, ``current`` (or later) highlighted."""
+    order = [state for state, _ in _STEPS]
+    current_index = len(order) if current is LoginState.DONE else order.index(current)
+    steps = []
+    for i, (_state, label) in enumerate(_STEPS):
+        if i < current_index:
+            css, dot = "done", "&#10003;"
+        elif i == current_index:
+            css, dot = "active", str(i + 1)
+        else:
+            css, dot = "", str(i + 1)
+        steps.append(
+            f'<div class="step {css}"><div class="dot">{dot}</div>'
+            f'<div class="label">{html.escape(label)}</div></div>'
+        )
+    return f'<div class="stepper">{"".join(steps)}</div>'
+
+
+def _result(kind: str, glyph: str, status: LoginStatus) -> str:
+    """Render the large pass/fail badge shown once an attempt has finished."""
+    return (
+        f'<div class="result {kind}">'
+        f'<div class="badge" aria-hidden="true">{glyph}</div>'
+        f"<p id=detail>{html.escape(status.detail)}</p></div>"
+    )
+
+
 def _render(status: LoginStatus) -> HTMLResponse:
     if status.state is LoginState.AWAITING_PASSWORD:
-        return _page(_detail(status, "muted") + _PASSWORD_FORM.format(label="Sign in"))
+        return _page(
+            _stepper(status.state)
+            + _detail(status, "muted")
+            + _PASSWORD_FORM.format(label="Sign in")
+        )
     if status.state is LoginState.LOGGING_IN:
         return _page(
-            _detail(status, "muted")
+            _stepper(status.state)
+            + _detail(status, "muted")
             + "<p class=muted>This can take up to a minute.</p>",
             script=_poll_script("logging_in"),
         )
     if status.state is LoginState.AWAITING_OTP:
         return _page(
-            _detail(status, "") + _OTP_FORM, script=_poll_script("awaiting_otp")
+            _stepper(status.state) + _detail(status, "") + _OTP_FORM,
+            script=_poll_script("awaiting_otp"),
         )
     if status.state is LoginState.DONE:
-        return _page(_detail(status, "") + "<p class=muted>You can close this tab.</p>")
-    return _page(_detail(status, "err") + _PASSWORD_FORM.format(label="Try again"))
+        return _page(
+            _stepper(status.state)
+            + _result("ok", "&#10003;", status)
+            + "<p class=muted>You can close this tab.</p>"
+        )
+    # FAILED or EXPIRED: which stage it got to isn't tracked once it's gone
+    # wrong, so lead with the unambiguous cross rather than guess a stepper.
+    return _page(
+        _result("err", "&#10007;", status) + _PASSWORD_FORM.format(label="Try again")
+    )
 
 
 def _same_origin(request: Request) -> bool:
