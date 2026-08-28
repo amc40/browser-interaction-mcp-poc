@@ -301,10 +301,8 @@ def test_seeds_minimal_consent_cookies_so_the_banner_never_renders(
     consent = seeded["OptanonConsent"]["value"]
     # strictly-necessary only: group 1 in, every optional group out.
     assert "groups=1%3A1%2C2%3A0%2C3%3A0%2C4%3A0" in consent
-    assert {c["domain"] for c in cookies_seen[0]} == {
-        ".www.sainsburys.co.uk",
-        ".account.sainsburys.co.uk",
-    }
+    # the registrable domain: one entry covers www, account and the rest.
+    assert {c["domain"] for c in cookies_seen[0]} == {".sainsburys.co.uk"}
 
 
 def test_raises_when_no_heading_is_found(monkeypatch: pytest.MonkeyPatch) -> None:

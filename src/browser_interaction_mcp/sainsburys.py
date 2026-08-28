@@ -55,7 +55,9 @@ showed, and isn't obvious from the public pages alone:
   actioned. Rather than race to dismiss it, `_consent_cookies` seeds the
   cookies OneTrust writes on a "Continue without accepting" choice
   (strictly-necessary only, every optional category refused) before the first
-  navigation, so it never renders.
+  navigation, so it never renders. They go on the registrable domain
+  (`.sainsburys.co.uk`); a `.www.sainsburys.co.uk` cookie is not what OneTrust
+  reads on that host.
 - MFA, when Sainsbury's asks for it, is a further step after the password -
   not guaranteed to appear (it seems to depend on whether the device/network
   is already trusted). `refresh_session` detects it by the verification-code
@@ -116,9 +118,9 @@ _PRODUCTS_WE_LOVE_HEADING = re.compile("products we love", re.IGNORECASE)
 # with a full-page backdrop that silently blocks every click until it's
 # actioned. Rather than race to dismiss it on each page, we seed the cookies it
 # writes when a choice is made, before the first navigation, so it never
-# renders. Its own deployments span two hosts (www / account), each read only
-# its own host's cookie.
-_CONSENT_COOKIE_HOSTS = (".www.sainsburys.co.uk", ".account.sainsburys.co.uk")
+# renders. They go on the registrable domain, which is what OneTrust reads on
+# every *.sainsburys.co.uk host - a `.www.sainsburys.co.uk` cookie is not.
+_CONSENT_COOKIE_DOMAIN = ".sainsburys.co.uk"
 
 # Non-product headings that can appear inside/around the carousel widget
 # (an accessible label for the carousel region, a trailing copyright-terms
@@ -208,12 +210,16 @@ def _consent_cookies() -> list[dict[str, object]]:
     )
     closed = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     expires = int((now + timedelta(days=365)).timestamp())
-    cookies: list[dict[str, object]] = []
-    for host in _CONSENT_COOKIE_HOSTS:
-        common = {"domain": host, "path": "/", "expires": expires, "sameSite": "Lax"}
-        cookies.append({"name": "OptanonAlertBoxClosed", "value": closed, **common})
-        cookies.append({"name": "OptanonConsent", "value": consent, **common})
-    return cookies
+    common = {
+        "domain": _CONSENT_COOKIE_DOMAIN,
+        "path": "/",
+        "expires": expires,
+        "sameSite": "Lax",
+    }
+    return [
+        {"name": "OptanonAlertBoxClosed", "value": closed, **common},
+        {"name": "OptanonConsent", "value": consent, **common},
+    ]
 
 
 def _heading_texts(page: Page) -> list[str]:
