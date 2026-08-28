@@ -141,6 +141,9 @@ class SainsburysLoginFlow:
                 raise LoginInProgressError(msg)
             self._teardown_locked()
 
+            # mkdtemp is already 0700; it also holds a failure screenshot that
+            # can show the typed username or an on-screen OTP, so it must stay
+            # owner-only. Torn down within TERMINAL_RETENTION_SECONDS.
             ipc_dir = Path(tempfile.mkdtemp(prefix="sainsburys-login-"))
             proc = self._popen(
                 [

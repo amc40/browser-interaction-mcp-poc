@@ -34,6 +34,7 @@ class FakeLocator:
     clicked: bool = False
     click_count: int = 0
     raises_on_wait: bool = False
+    visible: bool = False
     filled: str | None = None
     pressed_keys: list[str] = field(default_factory=list)
     heading: FakeLocator | None = None
@@ -72,6 +73,10 @@ class FakeLocator:
         if self.raises_on_wait:
             msg = "Timeout waiting for locator"
             raise PlaywrightTimeoutError(msg)
+
+    def is_visible(self) -> bool:
+        """Return the pre-wired visibility."""
+        return self.visible
 
     def get_by_role(self, role: str, *, name: object = None) -> FakeLocator:
         """Return this tile's product-name heading."""
@@ -122,6 +127,7 @@ class FakePage:
     context: FakeBrowserContext = field(default_factory=FakeBrowserContext)
     url: str = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
     goto_calls: list[str] = field(default_factory=list)
+    screenshot_path: object = None
 
     def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
         """Record the requested URL.
@@ -138,9 +144,13 @@ class FakePage:
         """No-op: the fake has no real navigation to settle."""
         del state, timeout
 
-    def wait_for_url(self, url: object, *, timeout: int | None = None) -> None:
-        """No-op: redirect tests set `self.url` up front."""
-        del url, timeout
+    def wait_for_timeout(self, timeout: int) -> None:
+        """No-op: no real clock to wait on."""
+        del timeout
+
+    def screenshot(self, *, path: object) -> None:
+        """Record that a debug screenshot was requested."""
+        self.screenshot_path = path
 
     def get_by_role(
         self, role: str, *, name: object = None
@@ -407,7 +417,7 @@ def test_add_to_basket_seeds_consent_cookies(
 def test_add_to_basket_raises_when_redirected_to_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(url="https://www.sainsburys.co.uk/gol-ui/oauth/login?returnUrl=%2F")
+    page = FakePage(username_field=FakeLocator(visible=True))
     _wire(monkeypatch, page)
 
     with pytest.raises(sainsburys.NotLoggedInError, match=r"sainsburys_login\.py"):
@@ -518,7 +528,7 @@ def test_refresh_session_submits_the_otp_when_redirected_to_mfa(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    page = FakePage(url="https://account.sainsburys.co.uk/gol/login/mfa")
+    page = FakePage(otp_field=FakeLocator(visible=True))
     _wire(monkeypatch, page)
     storage_state_path = tmp_path / "session.json"
 
@@ -538,7 +548,7 @@ def test_refresh_session_raises_when_mfa_is_required_and_no_otp_is_given(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    page = FakePage(url="https://account.sainsburys.co.uk/gol/login/mfa")
+    page = FakePage(otp_field=FakeLocator(visible=True))
     _wire(monkeypatch, page)
 
     with pytest.raises(sainsburys.NotLoggedInError, match="verification code"):
@@ -557,8 +567,9 @@ def test_refresh_session_raises_when_still_not_logged_in_afterwards(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    page = FakePage(url="https://www.sainsburys.co.uk/gol-ui/oauth/login?returnUrl=%2F")
+    page = FakePage(username_field=FakeLocator(visible=True))
     _wire(monkeypatch, page)
+    shot = tmp_path / "failure.png"
 
     with pytest.raises(sainsburys.NotLoggedInError, match="check the password"):
         sainsburys.refresh_session(
@@ -566,9 +577,11 @@ def test_refresh_session_raises_when_still_not_logged_in_afterwards(
             "wrong-password",
             storage_state_path=tmp_path / "session.json",
             get_otp=_no_otp,
+            failure_screenshot_path=shot,
         )
 
     assert page.context.storage_state_calls == []
+    assert page.screenshot_path == shot  # captured for debugging
 
 
 def test_refresh_session_seeds_consent_cookies(
