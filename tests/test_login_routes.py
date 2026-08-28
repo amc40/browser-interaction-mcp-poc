@@ -147,15 +147,23 @@ async def test_the_otp_page_does_not_reload_itself_on_every_poll(
     assert "s.state!==R" in page.text
 
 
-async def test_a_same_site_post_is_allowed_despite_the_http_last_hop(
+@pytest.mark.parametrize("origin", [_BASE_URL, "null", None])
+async def test_a_same_site_post_is_allowed(
     client: httpx.AsyncClient,
     session_headers: dict[str, str],
     workers: list[_FakeWorker],
+    origin: str | None,
 ) -> None:
+    """A same-site password POST is accepted.
+
+    `_BASE_URL` is the plain case; `null`/absent happen under some browsers'
+    referrer policies and are covered by the SameSite=Strict cookie.
+    """
+    headers = dict(session_headers)
+    if origin is not None:
+        headers["origin"] = origin
     response = await client.post(
-        "/sainsburys-login/password",
-        data={"password": "hunter2"},
-        headers={**session_headers, "origin": _BASE_URL},
+        "/sainsburys-login/password", data={"password": "hunter2"}, headers=headers
     )
 
     assert response.status_code == 303
