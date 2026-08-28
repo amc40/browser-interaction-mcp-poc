@@ -15,11 +15,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
 
 from browser_interaction_mcp import sainsburys
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from fastmcp import FastMCP
@@ -71,6 +73,21 @@ class AddedToBasket(BaseModel):
     """Confirmation that a product was added to the Sainsbury's basket."""
 
     product: str = Field(description="Name of the product added, as shown on its page.")
+
+
+def _guard_session[T](action: Callable[[], T]) -> T:
+    """Run a browser action, surfacing a missing or stale session usefully.
+
+    `sainsburys.NotLoggedInError` is a plain `RuntimeError`, so a server with
+    error masking on - every deployed one - would collapse its message to a
+    bare "internal error". Re-raising as `ToolError` keeps the message (which
+    tells the caller to get the operator to re-authenticate at
+    `/sainsburys-login`) intact through the mask.
+    """
+    try:
+        return action()
+    except sainsburys.NotLoggedInError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
@@ -143,8 +160,10 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         Needs an already-authenticated Sainsbury's session - see
         `sainsburys_add_to_basket`'s docstring for how to capture one.
         """
-        product_matches = sainsburys.search_products(
-            query, storage_state_path=_require_storage_state()
+        product_matches = _guard_session(
+            lambda: sainsburys.search_products(
+                query, storage_state_path=_require_storage_state()
+            ),
         )
         return ProductSearchResults(
             results=[
@@ -181,7 +200,9 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         it only replays a captured session, and raises if none is set up or
         the saved one is no longer accepted.
         """
-        product = sainsburys.add_to_basket(
-            product_name, storage_state_path=_require_storage_state()
+        product = _guard_session(
+            lambda: sainsburys.add_to_basket(
+                product_name, storage_state_path=_require_storage_state()
+            ),
         )
         return AddedToBasket(product=product)
