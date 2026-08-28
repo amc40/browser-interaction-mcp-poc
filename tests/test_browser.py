@@ -148,9 +148,15 @@ class FakePage:
 class FakeContext:
     """Stands in for a Playwright BrowserContext."""
 
+    added_cookies: list[object] = field(default_factory=list)
+
     def new_page(self) -> FakePage:
         """Return the fake page."""
         return FakePage()
+
+    def add_cookies(self, cookies: object) -> None:
+        """Record cookies seeded before the first navigation."""
+        self.added_cookies.append(cookies)
 
 
 @dataclass
@@ -159,11 +165,12 @@ class FakeBrowser:
 
     closed: bool = False
     context_kwargs: Mapping[str, object] = field(default_factory=dict)
+    context_to_return: FakeContext = field(default_factory=FakeContext)
 
     def new_context(self, **kwargs: object) -> FakeContext:
         """Record the context kwargs and return the fake context."""
         self.context_kwargs = kwargs
-        return FakeContext()
+        return self.context_to_return
 
     def close(self) -> None:
         """Record that the browser was closed."""
@@ -291,3 +298,24 @@ def test_storage_state_is_passed_through_to_the_new_context(
         pass
 
     assert chromium.browser_to_return.context_kwargs["storage_state"] == "session.json"
+
+
+def test_no_cookies_are_added_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    chromium = _wire(monkeypatch)
+
+    with browser.browser_page(headless=True):
+        pass
+
+    assert chromium.browser_to_return.context_to_return.added_cookies == []
+
+
+def test_cookies_are_seeded_into_the_context_before_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chromium = _wire(monkeypatch)
+    seed = [{"name": "OptanonAlertBoxClosed", "value": "x", "domain": ".example"}]
+
+    with browser.browser_page(headless=True, cookies=seed):
+        pass
+
+    assert chromium.browser_to_return.context_to_return.added_cookies == [seed]

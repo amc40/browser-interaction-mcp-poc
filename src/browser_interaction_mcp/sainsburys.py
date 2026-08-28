@@ -44,15 +44,21 @@ no longer guesses: they were taken from a real Playwright codegen recording
 of a manual login and search-and-add flow, not invented. What that recording
 showed, and isn't obvious from the public pages alone:
 
-- The login flow lives at `/gol-ui/oauth/login`, distinct from the public
-  groceries site, and its cookie consent button reads "Required only" -
-  different text from the "Continue and accept" `products_we_love` dismisses.
-  `_dismiss_cookie_banner` matches either.
-- MFA, when Sainsbury's asks for it, happens on a *different domain*
-  (`account.sainsburys.co.uk/gol/login/mfa`) - not something `add_to_basket`
+- `www.sainsburys.co.uk/gol-ui/oauth/login` is only a redirect shell now: it
+  bounces to the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...`
+  (an Ory-style identity provider). `refresh_session` waits for the form to
+  appear before acting, and treats either path as "not logged in".
+- The consent banner is OneTrust, injected asynchronously *after* the load
+  event, with a full-page backdrop that blocks every click until it's
+  actioned. Rather than race to dismiss it, `_consent_cookies` seeds the
+  cookies OneTrust writes on a "Continue without accepting" choice
+  (strictly-necessary only, every optional category refused) before the first
+  navigation, so it never renders.
+- MFA, when Sainsbury's asks for it, is a further step at
+  `account.sainsburys.co.uk/gol/login/mfa` - not something `add_to_basket`
   itself ever has to handle, since by the time it runs the session is already
-  captured, but `scripts/sainsburys_login.py` has to recognise it as "still
-  logging in", not "done".
+  captured, but the login flow has to recognise it as "still logging in", not
+  "done".
 - Search is a `combobox`, filled and submitted with Enter - not a URL query
   parameter.
 - Each search result is `data-testid="product-tile-<id>"`, and adding it to
@@ -77,9 +83,13 @@ Two things learned there that aren't obvious from the site alone:
 
 from __future__ import annotations
 
+import contextlib
 import re
 import stat
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
@@ -100,29 +110,52 @@ DEFAULT_SEARCH_QUERY = "washing up liquid"
 
 _PRODUCTS_WE_LOVE_HEADING = re.compile("products we love", re.IGNORECASE)
 
-# Two different consent-management copies seen on the real site: "Continue
-# and accept" on the public groceries homepage, "Required only" on the
-# oauth/login flow. Matched broadly ("accept" or "required only" anywhere in
-# the name) since consent-management vendors change their copy without
-# warning, and this is scoped to a button element already.
-_COOKIE_ACCEPT_NAME = re.compile("accept|required only", re.IGNORECASE)
+# The consent banner is OneTrust, injected asynchronously after the load event,
+# with a full-page backdrop that silently blocks every click until it's
+# actioned. Rather than race to dismiss it on each page, we seed the cookies it
+# writes when a choice is made, before the first navigation, so it never
+# renders. Its own deployments span two hosts (www / account), each read only
+# its own host's cookie.
+_CONSENT_COOKIE_HOSTS = (".www.sainsburys.co.uk", ".account.sainsburys.co.uk")
 
 # Non-product headings that can appear inside/around the carousel widget
 # (an accessible label for the carousel region, a trailing copyright-terms
 # link styled as a heading) - skipped rather than counted as products.
 _NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE)
 
-# Sainsbury's own login page, redirected to when a session isn't (or is no
-# longer) authenticated - taken from a real login recording, not guessed.
-# Checked by path only, not the full URL, since query strings there commonly
-# carry a return-to address.
-_LOGIN_PATH = "/gol-ui/oauth/login"
-LOGIN_URL = f"https://www.sainsburys.co.uk{_LOGIN_PATH}"
+# Where a browser lands when a session isn't (or is no longer) authenticated.
+# `www.sainsburys.co.uk/gol-ui/oauth/login` is only a shell now: it bounces to
+# the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...`
+# (an Ory-style identity provider). Either path means "not logged in"; matched
+# by path only, since the query string carries a per-attempt challenge.
+LOGIN_URL = "https://www.sainsburys.co.uk/gol-ui/oauth/login"
+_LOGIN_PATHS = ("/gol-ui/oauth/login", "/gol/login")
 
-# MFA, when Sainsbury's asks for it, happens on a different domain entirely -
-# also from the real recording, and also not guaranteed to appear (it seems
-# to depend on whether the device/network is already trusted).
+# MFA, when Sainsbury's asks for it, is a further step under the account
+# domain - not guaranteed to appear (it seems to depend on whether the
+# device/network is already trusted). Checked before the not-logged-in paths,
+# since "/gol/login/mfa" also contains "/gol/login".
 _MFA_PATH = "/gol/login/mfa"
+
+
+def _on_login_page(url: str) -> bool:
+    """Whether ``url`` is a Sainsbury's login page (and not the MFA step)."""
+    return _MFA_PATH not in url and any(path in url for path in _LOGIN_PATHS)
+
+
+def _raise_if_not_logged_in(page: Page, message: str) -> None:
+    """Raise ``NotLoggedInError`` if the page has landed on the login screen.
+
+    An unauthenticated visit to an account page redirects to the login form
+    *client-side*, a beat after the first document loads - so this waits
+    briefly for that redirect before deciding, rather than reading a URL that
+    hasn't settled yet.
+    """
+    with contextlib.suppress(PlaywrightTimeoutError):
+        page.wait_for_url(_on_login_page, timeout=10_000)
+    if _on_login_page(page.url):
+        raise NotLoggedInError(message)
+
 
 # Login form field test ids, from the same recording.
 _USERNAME_TEST_ID = "username"
@@ -154,10 +187,31 @@ class NotLoggedInError(RuntimeError):
     """
 
 
-def _dismiss_cookie_banner(page: Page) -> None:
-    button = page.get_by_role("button", name=_COOKIE_ACCEPT_NAME).first
-    if button.count() > 0:
-        button.click(timeout=15_000)
+def _consent_cookies() -> list[dict[str, object]]:
+    """Cookies telling Sainsbury's OneTrust the consent choice is already made.
+
+    Seeded before the first navigation so the blocking consent banner never
+    renders. `groups=1:1,2:0,3:0,4:0` is strictly-necessary only - every
+    optional category refused. The shape and field set were taken from a real
+    "Continue without accepting" click on the live login flow.
+    """
+    now = datetime.now(UTC)
+    stamp = quote(
+        now.strftime("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)"),
+    )
+    consent = (
+        f"isGpcEnabled=0&datestamp={stamp}&version=202507.1.0&isIABGlobal=false"
+        f"&hosts=&consentId={uuid.uuid4()}&interactionCount=1"
+        "&landingPath=NotLandingPage&groups=1%3A1%2C2%3A0%2C3%3A0%2C4%3A0"
+    )
+    closed = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    expires = int((now + timedelta(days=365)).timestamp())
+    cookies: list[dict[str, object]] = []
+    for host in _CONSENT_COOKIE_HOSTS:
+        common = {"domain": host, "path": "/", "expires": expires, "sameSite": "Lax"}
+        cookies.append({"name": "OptanonAlertBoxClosed", "value": closed, **common})
+        cookies.append({"name": "OptanonConsent", "value": consent, **common})
+    return cookies
 
 
 def _heading_texts(page: Page) -> list[str]:
@@ -229,9 +283,8 @@ def products_we_love(url: str = GROCERIES_URL, count: int = 5) -> list[str]:
     Raises:
         RuntimeError: If the section cannot be located on the loaded page.
     """
-    with browser_page(headless=False) as page:
-        page.goto(url, wait_until="load", timeout=30_000)
-        _dismiss_cookie_banner(page)
+    with browser_page(headless=False, cookies=_consent_cookies()) as page:
+        page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
         heading = page.get_by_role("heading", name=_PRODUCTS_WE_LOVE_HEADING).first
         _wait_for_page_to_settle(heading)
@@ -250,15 +303,16 @@ def _check_logged_in(page: Page) -> None:
             the session in `storage_state` is missing, expired, or was
             never authenticated to begin with.
     """
-    if _LOGIN_PATH in page.url:
-        msg = (
+    _raise_if_not_logged_in(
+        page,
+        (
             "Redirected to the Sainsbury's login page: the saved session is "
             "missing or no longer accepted. Run scripts/sainsburys_login.py "
-            "locally, or call sainsburys_refresh_session, to log in and "
-            "capture a fresh one - see browser.browser_page's docstring for "
-            "how it's used from there."
-        )
-        raise NotLoggedInError(msg)
+            "locally, or visit /sainsburys-login on the deployed server, to "
+            "log in and capture a fresh one - see browser.browser_page's "
+            "docstring for how it's used from there."
+        ),
+    )
 
 
 def add_to_basket(
@@ -295,9 +349,13 @@ def add_to_basket(
         RuntimeError: If no matching result, or no "add" control on it, is
             found.
     """
-    with browser_page(headless=False, storage_state=storage_state_path) as page:
-        page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=30_000)
-        _dismiss_cookie_banner(page)
+    with browser_page(
+        headless=False,
+        storage_state=storage_state_path,
+        cookies=_consent_cookies(),
+    ) as page:
+        with contextlib.suppress(PlaywrightTimeoutError):
+            page.goto(MY_ACCOUNT_URL, wait_until="domcontentloaded", timeout=30_000)
         _check_logged_in(page)
 
         search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
@@ -359,13 +417,20 @@ def refresh_session(
             or if the session still isn't authenticated after everything
             above - most likely a wrong password.
     """
-    with browser_page(headless=False) as page:
-        page.goto(LOGIN_URL, wait_until="load", timeout=30_000)
-        _dismiss_cookie_banner(page)
+    with browser_page(headless=False, cookies=_consent_cookies()) as page:
+        # `wait_until="load"` is unreliable on these pages - a background poller
+        # keeps the network busy, so it eats the full timeout. Wait for the DOM
+        # and then for the specific element that matters instead.
+        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
+        # LOGIN_URL bounces through a redirect to the real form on the account
+        # domain; wait for that form before filling anything.
+        username_field = page.get_by_test_id(_USERNAME_TEST_ID)
+        username_field.wait_for(state="visible", timeout=30_000)
 
-        page.get_by_test_id(_USERNAME_TEST_ID).fill(username)
+        username_field.fill(username)
         page.get_by_test_id(_PASSWORD_TEST_ID).fill(password)
         page.get_by_test_id(_LOG_IN_TEST_ID).click(timeout=15_000)
+        page.wait_for_load_state("domcontentloaded", timeout=30_000)
 
         if _MFA_PATH in page.url:
             otp = get_otp()
@@ -378,14 +443,13 @@ def refresh_session(
             page.get_by_test_id(_OTP_TEST_ID).fill(otp)
             page.get_by_test_id(_SUBMIT_CODE_TEST_ID).click(timeout=15_000)
 
-        page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=30_000)
-        _dismiss_cookie_banner(page)
-        if _LOGIN_PATH in page.url:
-            msg = (
-                "Still not logged in after submitting the login form (and "
-                "any verification code) - check the password is correct."
-            )
-            raise NotLoggedInError(msg)
+        with contextlib.suppress(PlaywrightTimeoutError):
+            page.goto(MY_ACCOUNT_URL, wait_until="domcontentloaded", timeout=30_000)
+        _raise_if_not_logged_in(
+            page,
+            "Still not logged in after submitting the login form (and any "
+            "verification code) - check the password is correct.",
+        )
 
         page.context.storage_state(path=storage_state_path)
 

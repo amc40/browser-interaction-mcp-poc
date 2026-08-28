@@ -27,9 +27,9 @@ from typing import TYPE_CHECKING
 from playwright.sync_api import sync_playwright
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
     from pathlib import Path
-    from typing import Protocol
+    from typing import Any, Protocol
 
     from playwright.sync_api import Browser, Page, ViewportSize
 
@@ -60,7 +60,12 @@ _TIMEZONE_ID = "Europe/London"
 _EXTRA_HTTP_HEADERS = {"Accept-Language": "en-GB,en;q=0.9"}
 
 
-def _new_context(browser: Browser, *, storage_state: str | Path | None) -> Page:
+def _new_context(
+    browser: Browser,
+    *,
+    storage_state: str | Path | None,
+    cookies: Sequence[dict[str, Any]] | None = None,
+) -> Page:
     context = browser.new_context(
         user_agent=USER_AGENT,
         viewport=_VIEWPORT,
@@ -69,6 +74,8 @@ def _new_context(browser: Browser, *, storage_state: str | Path | None) -> Page:
         extra_http_headers=_EXTRA_HTTP_HEADERS,
         storage_state=storage_state,
     )
+    if cookies:
+        context.add_cookies(cookies)  # type: ignore[arg-type]
     return context.new_page()
 
 
@@ -147,6 +154,7 @@ def browser_page(
     *,
     headless: bool,
     storage_state: str | Path | None = None,
+    cookies: Sequence[dict[str, Any]] | None = None,
 ) -> Iterator[Page]:
     """Open one page in a fresh browser and context, closing both on exit.
 
@@ -161,6 +169,10 @@ def browser_page(
             without ever holding the underlying credentials. `None` (the
             default) opens a fresh, logged-out context, same as before this
             parameter existed.
+        cookies: Cookies to add to the context before the first navigation,
+            in Playwright's `add_cookies` shape. For seeding things like a
+            consent-management "already chosen" cookie so a blocking banner
+            never renders.
 
     Yields:
         A ready-to-use page, in a fresh browser context - authenticated if
@@ -175,4 +187,4 @@ def browser_page(
         playwright = stack.enter_context(sync_playwright())
         browser = playwright.chromium.launch(headless=headless, env=launch_env)
         stack.callback(browser.close)
-        yield _new_context(browser, storage_state=storage_state)
+        yield _new_context(browser, storage_state=storage_state, cookies=cookies)
