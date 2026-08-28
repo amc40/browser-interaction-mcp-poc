@@ -28,6 +28,7 @@ async def test_server_exposes_only_registered_tools(
     assert [tool.name for tool in tools] == [
         "server_info",
         "sainsburys_products_we_love",
+        "sainsburys_search",
         "sainsburys_add_to_basket",
     ]
 
@@ -70,6 +71,53 @@ async def test_sainsburys_products_we_love_wires_to_the_browser_action(
     ]
 
 
+async def test_sainsburys_search_wires_to_the_browser_action(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticate: Authenticate,
+    tmp_path: Path,
+) -> None:
+    """Only checks the wiring - test_sainsburys.py covers the search itself."""
+    authenticate()
+    storage_state_path = tmp_path / "session.json"
+    storage_state_path.write_text("{}", encoding="utf-8")
+    settings = Settings(sainsburys_storage_state_path=storage_state_path)
+    seen_calls: list[tuple[str, Path]] = []
+
+    def fake_search_products(
+        query: str, *, storage_state_path: Path
+    ) -> list[sainsburys.ProductMatch]:
+        seen_calls.append((query, storage_state_path))
+        return [
+            sainsburys.ProductMatch(
+                name="Chocolate Digestives 400g",
+                image_url="https://example.invalid/digestives.jpg",
+            ),
+            sainsburys.ProductMatch(name="Semi Skimmed Milk 2L", image_url=None),
+        ]
+
+    monkeypatch.setattr(sainsburys, "search_products", fake_search_products)
+
+    async with Client(build_server(settings)) as client:
+        result = await client.call_tool("sainsburys_search", {"query": "chocolate"})
+
+    assert [(r.name, r.image_url) for r in result.data.results] == [
+        ("Chocolate Digestives 400g", "https://example.invalid/digestives.jpg"),
+        ("Semi Skimmed Milk 2L", None),
+    ]
+    assert seen_calls == [("chocolate", storage_state_path)]
+
+
+async def test_sainsburys_search_refuses_without_a_saved_session(
+    authenticate: Authenticate,
+) -> None:
+    authenticate()
+    settings = Settings(sainsburys_storage_state_path=None, include_error_details=True)
+
+    async with Client(build_server(settings)) as client:
+        with pytest.raises(ToolError, match=r"sainsburys_login\.py"):
+            await client.call_tool("sainsburys_search")
+
+
 async def test_sainsburys_add_to_basket_wires_to_the_browser_action(
     monkeypatch: pytest.MonkeyPatch,
     authenticate: Authenticate,
@@ -82,19 +130,19 @@ async def test_sainsburys_add_to_basket_wires_to_the_browser_action(
     settings = Settings(sainsburys_storage_state_path=storage_state_path)
     seen_calls: list[tuple[str, Path]] = []
 
-    def fake_add_to_basket(query: str, *, storage_state_path: Path) -> str:
-        seen_calls.append((query, storage_state_path))
+    def fake_add_to_basket(product_name: str, *, storage_state_path: Path) -> str:
+        seen_calls.append((product_name, storage_state_path))
         return "Chocolate Digestives 400g"
 
     monkeypatch.setattr(sainsburys, "add_to_basket", fake_add_to_basket)
 
     async with Client(build_server(settings)) as client:
         result = await client.call_tool(
-            "sainsburys_add_to_basket", {"query": "washing up liquid"}
+            "sainsburys_add_to_basket", {"product_name": "Chocolate Digestives 400g"}
         )
 
     assert result.data.product == "Chocolate Digestives 400g"
-    assert seen_calls == [("washing up liquid", storage_state_path)]
+    assert seen_calls == [("Chocolate Digestives 400g", storage_state_path)]
 
 
 async def test_sainsburys_add_to_basket_refuses_without_a_saved_session(
@@ -105,7 +153,9 @@ async def test_sainsburys_add_to_basket_refuses_without_a_saved_session(
 
     async with Client(build_server(settings)) as client:
         with pytest.raises(ToolError, match=r"sainsburys_login\.py"):
-            await client.call_tool("sainsburys_add_to_basket")
+            await client.call_tool(
+                "sainsburys_add_to_basket", {"product_name": "Anything"}
+            )
 
 
 async def test_sainsburys_add_to_basket_refuses_when_the_session_file_is_missing(
@@ -121,7 +171,9 @@ async def test_sainsburys_add_to_basket_refuses_when_the_session_file_is_missing
 
     async with Client(build_server(settings)) as client:
         with pytest.raises(ToolError, match="No saved Sainsbury's session"):
-            await client.call_tool("sainsburys_add_to_basket")
+            await client.call_tool(
+                "sainsburys_add_to_basket", {"product_name": "Anything"}
+            )
 
 
 async def test_server_is_named_and_documented() -> None:

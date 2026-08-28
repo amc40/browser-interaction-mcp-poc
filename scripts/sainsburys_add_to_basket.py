@@ -8,10 +8,11 @@ what the server would run.
 
 Needs a captured session first - run `scripts/sainsburys_login.py` (with your
 own credentials, never in an automated environment) and pass its output path
-here.
+here. Run `scripts/sainsburys_search.py` first to find the exact product name
+to pass - `add_to_basket` only adds a result that matches it exactly.
 
 Usage:
-    uv run scripts/sainsburys_add_to_basket.py <storage-state-path> [search-query]
+    uv run scripts/sainsburys_add_to_basket.py <storage-state-path> <product-name>
 """
 
 from __future__ import annotations
@@ -23,18 +24,18 @@ from browser_interaction_mcp.sainsburys import add_to_basket
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
+    if len(argv) < 2:  # noqa: PLR2004 - <storage-state-path> and <product-name>
         print(
-            "Usage: sainsburys_add_to_basket.py <storage-state-path> [search-query]",
+            "Usage: sainsburys_add_to_basket.py <storage-state-path> <product-name>",
             file=sys.stderr,
         )
         return 2
 
     storage_state_path = Path(argv[0])
-    query_args = argv[1:2]
+    product_name = argv[1]
 
     try:
-        product = add_to_basket(*query_args, storage_state_path=storage_state_path)
+        product = add_to_basket(product_name, storage_state_path=storage_state_path)
     except Exception as exc:  # noqa: BLE001 - top-level script, report and exit
         print(f"Failed: {exc}", file=sys.stderr)
         return 1
