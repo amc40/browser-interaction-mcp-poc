@@ -21,19 +21,27 @@ browser profile.
 | `redaction.py` covers the credentials | It does, and only those: `SecretRedactor` replaces known secret *values* in log records. There is no DOM redactor | The bundle builder reuses it, as planned, but the attribute allowlist and text-node rule are all still to write |
 | Snapshot replay verifies a proposed locator | The suite fakes `Page` outright (`tests/test_sainsburys.py`); no test has ever loaded HTML into a real browser | Replay introduces a real Chromium to CI — a new job, not a new assertion in an existing one |
 | Heal branches are `heal/**` | The cloud-session push rules accept `claude/`-prefixed branches | Use `claude/heal-<fingerprint>`. A `heal/**` branch would be refused by the platform mechanic the design relies on |
-| The automation is known-good and goes stale | `sainsburys_add_to_basket` and `/sainsburys-login` have never run against the real site (README, "Not done yet") | See below — this decides when any of it may be switched on |
+| The automation is known-good and goes stale | It is: signing in at `/sainsburys-login` on the Pi and then searching and adding to the basket has been done end to end against the live site | The baseline the mechanism needs exists, for both the login locators and the search-and-add ones. See below for what that does and does not license |
 
-### The baseline problem, first
+### The baseline rule, now satisfied
 
 Self-healing repairs automation that *worked* and stopped working. Pointed at
 automation that has never worked, it is a machine for generating confident
-guesses about why. Until `add_to_basket` has completed against the real site at
-least once, a failure is evidence the selectors were wrong from the start, and
-the right response is a person reading the page — not a heal.
+guesses about why: a failure is then evidence the selectors were wrong from the
+start, and the right response is a person reading the page, not a heal.
 
-**So: no automatic trigger is wired up until each healable action has succeeded
-for real at least once.** Stages 0–3 below are all worth building before then;
-stage 4 is not.
+A completed real-site run — sign in on the Pi, search, add — settles that for
+every locator it touched: the login form's fields, the search box, the result
+tile and its add button are all confirmed against the live page, so a future
+timeout on one of them really is the page having moved. That is exactly the
+signal the mechanism is built to act on, and it removes what would otherwise
+have been the blocker on stage 4.
+
+The rule itself stands as a standing condition rather than a one-off gate: **a
+locator enters the healable set only once the action using it has succeeded
+against the real site.** Newly written actions start outside it and are promoted
+by a real run, which also keeps the fixture corpus honest — every healable
+locator has at least one snapshot of the page as it looked when it worked.
 
 ### The deploy gate, second
 
@@ -146,8 +154,8 @@ merged and deployed through the gate.
 
 ### Stage 4 — the automatic trigger
 
-Only after an action has succeeded against the real site, and stage 3 has run at
-least once for real.
+Gated on stage 3 having run once for real, and on each covered action meeting
+the baseline rule above — which the login and search-and-add paths already do.
 
 - Pi side: on a healable failure, upload the bundle and POST the manifest to a
   routine's API trigger. The HMAC-signed, size-capped, single-purpose shape of
