@@ -671,6 +671,58 @@ def test_add_to_basket_raises_when_no_result_matches_exactly(
         )
 
 
+@pytest.mark.parametrize("ellipsis", ["...", "…"])
+def test_add_to_basket_matches_a_name_truncated_with_a_trailing_ellipsis(
+    monkeypatch: pytest.MonkeyPatch, ellipsis: str
+) -> None:
+    """A name cut short by some other surface before being passed back in.
+
+    Not anything this codebase does to a name itself - see `add_to_basket`'s
+    docstring.
+    """
+    add_button = FakeLocator(count_=1)
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(
+                    text="Sainsbury's Sundream Plum Vine Tomatoes, Taste the Difference"
+                ),
+                add_button=add_button,
+            )
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    result = sainsburys.add_to_basket(
+        f"Sainsbury's Sundream Plum Vine Tomatoes, Taste the Differenc{ellipsis}",
+        storage_state_path=Path("session.json"),
+    )
+
+    assert result == "Sainsbury's Sundream Plum Vine Tomatoes, Taste the Difference"
+    assert add_button.clicked
+    # The literal ellipsis is stripped before it ever reaches the site's own
+    # search box - searching on it wouldn't find this result either.
+    assert page.search_box.filled == (
+        "Sainsbury's Sundream Plum Vine Tomatoes, Taste the Differenc"
+    )
+
+
+def test_add_to_basket_still_raises_when_an_ellipsis_prefix_matches_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="Ecover Washing Up Liquid"))
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="No search result exactly matches"):
+        sainsburys.add_to_basket(
+            "Fairy Lemon Washing Up...", storage_state_path=Path("session.json")
+        )
+
+
 def test_add_to_basket_skips_an_unreadable_tile_to_reach_the_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

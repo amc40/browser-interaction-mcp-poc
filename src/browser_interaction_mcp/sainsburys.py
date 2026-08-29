@@ -512,17 +512,58 @@ def _readable_matches(tiles: Locator) -> Iterator[ProductMatch]:
             yield match
 
 
-def _find_exact_match(tiles: Locator, product_name: str) -> Locator | None:
-    """Return the first tile whose product name exactly equals ``product_name``.
+# Markers a truncated display value ends in - a name cut short by a display
+# surface with a character limit (a chat client rendering a tool result, for
+# instance - nothing in this codebase itself truncates a product name) before
+# a caller copies it back into `add_to_basket`. `…` is the single-character
+# ellipsis some renderers use in place of three dots.
+_ELLIPSIS_SUFFIXES = ("...", "…")
+
+
+def _without_trailing_ellipsis(text: str) -> str | None:
+    """Return ``text`` with a trailing ellipsis (and its lead-in space) removed.
+
+    ``None`` if ``text`` doesn't end in one - callers use that to tell "this
+    looks like a name truncated by a display surface" from "this is just a
+    product name that happens to need no cleanup".
+    """
+    for suffix in _ELLIPSIS_SUFFIXES:
+        if text.endswith(suffix):
+            return text[: -len(suffix)].rstrip()
+    return None
+
+
+def _find_exact_match(tiles: Locator, product_name: str) -> tuple[Locator, str] | None:
+    """Return the first tile matching ``product_name``, with its full name.
 
     Matches on the same name `_product_match` would report for that tile -
     see its docstring for why - and skips tiles that don't read as a product.
+
+    Tries an exact match (whitespace aside) first. If ``product_name`` itself
+    ends in an ellipsis, falls back to a prefix match against the stripped
+    text - the shape of a name a display surface truncated before a caller
+    copied it back (see `_ELLIPSIS_SUFFIXES`), for which byte-exact matching
+    can never succeed no matter how the name is typed. The tile's own full
+    name is returned rather than ``product_name`` so a truncated input still
+    resolves to the real product name.
     """
     target = product_name.strip()
-    for tile in tiles.all()[:_MAX_RESULT_TILES]:
-        match = _product_match(tile)
-        if match is not None and match.name == target:
-            return tile
+    matches = [
+        (tile, match)
+        for tile, match in (
+            (tile, _product_match(tile)) for tile in tiles.all()[:_MAX_RESULT_TILES]
+        )
+        if match is not None
+    ]
+    for tile, match in matches:
+        if match.name == target:
+            return tile, match.name
+
+    prefix = _without_trailing_ellipsis(target)
+    if prefix:
+        for tile, match in matches:
+            if match.name.startswith(prefix):
+                return tile, match.name
     return None
 
 
@@ -550,10 +591,20 @@ def add_to_basket(
     wrong product for an ambiguous query. Naming the exact product avoids
     both.
 
+    If `product_name` itself ends in an ellipsis ("..." or "…") - the shape
+    of a name some *other* surface truncated (a chat client rendering a long
+    tool result, say) before a caller copied it back, not anything this
+    codebase does to a name itself - an exact match can never succeed no
+    matter how it's typed. Rather than fail every time on a value nobody
+    could have gotten right, this falls back to a prefix match against the
+    text before the ellipsis, and both the search itself and the returned
+    name use the result's real, full name rather than the truncated input.
+
     Args:
         product_name: The product's name, exactly as shown on its search
-            result tile (e.g. from `search_products`). Also used, as-is, as
-            the search term.
+            result tile (e.g. from `search_products`) - or, as a fallback,
+            that name with a trailing "..."/"…" if that's all a caller has.
+            Also used, ellipsis stripped, as the search term.
         storage_state_path: Path to a Playwright `storage_state` JSON file
             holding a logged-in session, captured by
             `scripts/sainsburys_login.py`.
@@ -561,7 +612,9 @@ def add_to_basket(
             "add" control this many times.
 
     Returns:
-        The added product's name, as shown on its result tile.
+        The added product's real, full name, as shown on its result tile -
+        not necessarily `product_name` itself, if it matched via the
+        ellipsis fallback above.
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
@@ -569,16 +622,21 @@ def add_to_basket(
             exactly, or the matching result has no "add" control.
     """
     with _authenticated_page(storage_state_path) as page:
-        tiles = _run_search(page, product_name)
+        # A query ending in literal ellipsis characters wouldn't find much on
+        # the real site's own search either, so search on the cleaned-up text
+        # whenever `product_name` has the shape of a truncated display value.
+        search_query = _without_trailing_ellipsis(product_name.strip()) or product_name
+        tiles = _run_search(page, search_query)
 
-        tile = _find_exact_match(tiles, product_name)
-        if tile is None:
+        found = _find_exact_match(tiles, product_name)
+        if found is None:
             msg = (
                 f"No search result exactly matches {product_name!r}. Call "
                 "search_products first and pass one of its product names "
                 "exactly, including capitalisation and punctuation."
             )
             raise RuntimeError(msg)
+        tile, matched_name = found
 
         add_button = tile.get_by_test_id(_ADD_BUTTON_TEST_ID)
         if add_button.count() == 0:
@@ -591,7 +649,7 @@ def add_to_basket(
         for _ in range(quantity):
             add_button.click(timeout=15_000)
 
-        return product_name.strip()
+        return matched_name
 
 
 def refresh_session(

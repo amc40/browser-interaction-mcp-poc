@@ -188,6 +188,12 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         (the site can re-rank or re-stock in between); the exact name can't.
         Call `sainsburys_search` first if you don't already have one.
 
+        If the name you have was itself cut short somewhere and ends in
+        "..." or "…" (e.g. it was truncated by whatever displayed
+        `sainsburys_search`'s results to you), pass it as-is rather than
+        guessing at the rest - it's matched as a prefix against the real
+        result, and the response reports the product's real, full name.
+
         `product_name` is only ever typed into Sainsbury's own site search,
         exactly as a person would - it cannot reach a page, selector or
         script this server hasn't approved in code.

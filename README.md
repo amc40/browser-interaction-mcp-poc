@@ -80,6 +80,14 @@ between) in a way a name can't. Both tools share the same
 `_authenticated_page`, `_run_search`, `_product_match`) so they can't drift
 into disagreeing about what a given search actually returns.
 
+If a `product_name` itself ends in "..." or "…" - the shape of a name some
+*other* surface truncated (a chat client rendering a long tool result, say)
+before it was copied back in - an exact match can never succeed no matter how
+it's typed. `add_to_basket` falls back to a prefix match against the text
+before the ellipsis for exactly that case, searches on the cleaned-up text
+(a query ending in literal ellipsis characters wouldn't find much on the real
+site's own search either), and reports back the product's real, full name.
+
 **`sainsburys_add_to_basket` is still unverified end to end.** Its selectors
 are drawn from a real recording rather than invented, but nobody has run it
 against a real, authenticated session yet - that needs credentials this
