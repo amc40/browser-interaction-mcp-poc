@@ -8,11 +8,12 @@ what the server would run.
 
 Needs a captured session first - run `scripts/sainsburys_login.py` (with your
 own credentials, never in an automated environment) and pass its output path
-here. Run `scripts/sainsburys_search.py` first to find the exact product name
-to pass - `add_to_basket` only adds a result that matches it exactly.
+here. Run `scripts/sainsburys_search.py` first to find a result to pass -
+either its `id` (preferred, if it has one), or its exact product name.
 
 Usage:
     uv run scripts/sainsburys_add_to_basket.py <storage-state-path> <product-name>
+    uv run scripts/sainsburys_add_to_basket.py <storage-state-path> <name> <product-id>
 """
 
 from __future__ import annotations
@@ -26,16 +27,20 @@ from browser_interaction_mcp.sainsburys import add_to_basket
 def main(argv: list[str]) -> int:
     if len(argv) < 2:  # noqa: PLR2004 - <storage-state-path> and <product-name>
         print(
-            "Usage: sainsburys_add_to_basket.py <storage-state-path> <product-name>",
+            "Usage: sainsburys_add_to_basket.py <storage-state-path> "
+            "<product-name> [product-id]",
             file=sys.stderr,
         )
         return 2
 
     storage_state_path = Path(argv[0])
     product_name = argv[1]
+    product_id = argv[2] if len(argv) > 2 else None  # noqa: PLR2004
 
     try:
-        product = add_to_basket(product_name, storage_state_path=storage_state_path)
+        product = add_to_basket(
+            product_name, product_id=product_id, storage_state_path=storage_state_path
+        )
     except Exception as exc:  # noqa: BLE001 - top-level script, report and exit
         print(f"Failed: {exc}", file=sys.stderr)
         return 1

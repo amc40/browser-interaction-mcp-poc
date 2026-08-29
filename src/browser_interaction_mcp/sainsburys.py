@@ -204,6 +204,7 @@ _SEARCH_BOX_NAME = re.compile("^Enter search terms", re.IGNORECASE)
 # with no separate "Add to basket"-named control and no need to open the
 # product page first. Confirmed against a real search-and-add recording.
 _PRODUCT_TILE_SELECTOR = '[data-testid^="product-tile-"]'
+_TILE_ID_PREFIX = "product-tile-"
 _ADD_BUTTON_TEST_ID = "add-button"
 
 
@@ -223,6 +224,7 @@ class ProductMatch:
 
     name: str
     image_url: str | None
+    id: str | None
 
 
 def _consent_cookies() -> list[dict[str, object]]:
@@ -478,14 +480,30 @@ _TILE_HEADING_TIMEOUT_MS = 4_000
 _MAX_RESULT_TILES = 60
 
 
-def _product_match(tile: Locator) -> ProductMatch | None:
-    """Read one tile's product name and image, or ``None`` if it isn't one.
+def _tile_id(tile: Locator) -> str | None:
+    """Return the id embedded in a tile's own `data-testid`, best-effort.
 
-    The one place either field is read: `add_to_basket`'s exact-match lookup
-    reuses this for `name` so a tile's name can't be read one way for display
-    and another way for matching. Returns ``None`` - rather than blocking on
-    `inner_text` for the full default timeout - for a tile whose name heading
-    never appears; see `_TILE_HEADING_TIMEOUT_MS`.
+    `_PRODUCT_TILE_SELECTOR` already guarantees the attribute exists and
+    starts with `_TILE_ID_PREFIX` for anything reaching this function - but,
+    like `image_url` below, parsed defensively rather than trusting that
+    never changes. ``None`` if the attribute is missing or doesn't have the
+    expected shape, same as a tile with no image gets `image_url=None`.
+    """
+    raw = tile.get_attribute("data-testid")
+    if raw is None or not raw.startswith(_TILE_ID_PREFIX):
+        return None
+    return raw.removeprefix(_TILE_ID_PREFIX) or None
+
+
+def _product_match(tile: Locator) -> ProductMatch | None:
+    """Read one tile's product name, image and id, or ``None`` if it isn't one.
+
+    The one place any of the three is read: `add_to_basket`'s matching
+    lookup (`_find_matching_tile`) reuses this for `name` and `id` so a
+    tile's name can't be read one way for display and another way for
+    matching. Returns ``None`` - rather than blocking on `inner_text` for the
+    full default timeout - for a tile whose name heading never appears; see
+    `_TILE_HEADING_TIMEOUT_MS`.
     """
     heading = tile.get_by_role("heading").first
     try:
@@ -497,7 +515,7 @@ def _product_match(tile: Locator) -> ProductMatch | None:
         return None
     image = tile.locator("img").first
     image_url = image.get_attribute("src") if image.count() > 0 else None
-    return ProductMatch(name=name, image_url=image_url)
+    return ProductMatch(name=name, image_url=image_url, id=_tile_id(tile))
 
 
 def _readable_matches(tiles: Locator) -> Iterator[ProductMatch]:
@@ -533,21 +551,32 @@ def _without_trailing_ellipsis(text: str) -> str | None:
     return None
 
 
-def _find_exact_match(tiles: Locator, product_name: str) -> tuple[Locator, str] | None:
-    """Return the first tile matching ``product_name``, with its full name.
+def _find_matching_tile(
+    tiles: Locator, product_name: str, product_id: str | None = None
+) -> tuple[Locator, str] | None:
+    """Return the first tile matching the given product, with its full name.
 
-    Matches on the same name `_product_match` would report for that tile -
-    see its docstring for why - and skips tiles that don't read as a product.
+    Matches on the same name and id `_product_match` would report for that
+    tile - see its docstring for why - and skips tiles that don't read as a
+    product.
 
-    Tries an exact match (whitespace aside) first. If ``product_name`` itself
-    ends in an ellipsis, falls back to a prefix match against the stripped
-    text - the shape of a name a display surface truncated before a caller
-    copied it back (see `_ELLIPSIS_SUFFIXES`), for which byte-exact matching
-    can never succeed no matter how the name is typed. The tile's own full
-    name is returned rather than ``product_name`` so a truncated input still
-    resolves to the real product name.
+    If ``product_id`` is given, it's the only thing matched on: the first
+    tile whose own id equals it, full stop. An id names one specific product
+    the way a byte-exact name can't quite - it isn't reshaped by whatever
+    displayed a result to the caller, the way a name can be truncated - so
+    there's no fallback to weigh against it.
+
+    Otherwise, tries an exact match on ``product_name`` (whitespace aside)
+    first. If ``product_name`` itself ends in an ellipsis, falls back to a
+    prefix match against the stripped text - the shape of a name a display
+    surface truncated before a caller copied it back (see
+    `_ELLIPSIS_SUFFIXES`), for which byte-exact matching can never succeed no
+    matter how the name is typed.
+
+    Either way, the tile's own full name is returned rather than
+    ``product_name``, so a truncated input still resolves to the real
+    product name.
     """
-    target = product_name.strip()
     matches = [
         (tile, match)
         for tile, match in (
@@ -555,6 +584,14 @@ def _find_exact_match(tiles: Locator, product_name: str) -> tuple[Locator, str] 
         )
         if match is not None
     ]
+
+    if product_id is not None:
+        for tile, match in matches:
+            if match.id == product_id:
+                return tile, match.name
+        return None
+
+    target = product_name.strip()
     for tile, match in matches:
         if match.name == target:
             return tile, match.name
@@ -571,9 +608,10 @@ def add_to_basket(
     product_name: str,
     *,
     storage_state_path: Path,
+    product_id: str | None = None,
     quantity: int = 1,
 ) -> str:
-    """Search for ``product_name`` and add the result matching it exactly.
+    """Search for ``product_name`` and add the result matching it.
 
     Requires an already-authenticated session - see the module docstring and
     `browser.browser_page`'s `storage_state` parameter. Mirrors a real,
@@ -583,43 +621,54 @@ def add_to_basket(
     end to end against a real, authenticated session - see the README's
     "Not done yet" section.
 
-    `product_name` must match a result's heading exactly (whitespace
-    trimmed) - typically one just returned by `search_products`. That's
-    deliberate rather than picking the first or an indexed result: an index
-    can go stale between a search and this call (the site re-ranks or
-    re-stocks in between), and blindly taking the first result can add the
-    wrong product for an ambiguous query. Naming the exact product avoids
-    both.
+    Which result is "the" match is deliberate rather than picking the first
+    or an indexed result: an index can go stale between a search and this
+    call (the site re-ranks or re-stocks in between), and blindly taking the
+    first result can add the wrong product for an ambiguous query. Naming the
+    exact product avoids both, and this accepts two ways to do that:
 
-    If `product_name` itself ends in an ellipsis ("..." or "…") - the shape
-    of a name some *other* surface truncated (a chat client rendering a long
-    tool result, say) before a caller copied it back, not anything this
-    codebase does to a name itself - an exact match can never succeed no
-    matter how it's typed. Rather than fail every time on a value nobody
-    could have gotten right, this falls back to a prefix match against the
-    text before the ellipsis, and both the search itself and the returned
-    name use the result's real, full name rather than the truncated input.
+    - `product_id`, a result's own id from `search_products` (its tile's
+      `data-testid`, e.g. `"7028441"` from `product-tile-7028441`) - the
+      more robust choice when it's available. It names one specific product
+      directly, so it isn't affected by anything happening to `product_name`
+      before it gets here.
+    - Otherwise, `product_name` must match a result's heading exactly
+      (whitespace aside) - typically one just returned by `search_products`.
+      If it itself ends in an ellipsis ("..." or "…") - the shape of a name
+      some *other* surface truncated (a chat client rendering a long tool
+      result, say) before a caller copied it back, not anything this
+      codebase does to a name itself - an exact match can never succeed no
+      matter how it's typed. Rather than fail every time on a value nobody
+      could have gotten right, this falls back to a prefix match against the
+      text before the ellipsis.
+
+    Either way, both the search itself and the returned name use the
+    result's real, full name rather than a possibly-truncated `product_name`.
 
     Args:
         product_name: The product's name, exactly as shown on its search
             result tile (e.g. from `search_products`) - or, as a fallback,
             that name with a trailing "..."/"…" if that's all a caller has.
-            Also used, ellipsis stripped, as the search term.
+            Used, ellipsis stripped, as the search term regardless of
+            whether `product_id` is also given.
         storage_state_path: Path to a Playwright `storage_state` JSON file
             holding a logged-in session, captured by
             `scripts/sainsburys_login.py`.
+        product_id: A result's own id, from `search_products`, if the caller
+            has one. When given, this is matched instead of `product_name` -
+            see above.
         quantity: How many of the product to add. Clicks the result tile's
             "add" control this many times.
 
     Returns:
         The added product's real, full name, as shown on its result tile -
-        not necessarily `product_name` itself, if it matched via the
-        ellipsis fallback above.
+        not necessarily `product_name` itself, if it matched via `product_id`
+        or the ellipsis fallback above.
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
-        RuntimeError: If no results are found, none match `product_name`
-            exactly, or the matching result has no "add" control.
+        RuntimeError: If no results are found, none match `product_id` or
+            `product_name`, or the matching result has no "add" control.
     """
     with _authenticated_page(storage_state_path) as page:
         # A query ending in literal ellipsis characters wouldn't find much on
@@ -628,13 +677,21 @@ def add_to_basket(
         search_query = _without_trailing_ellipsis(product_name.strip()) or product_name
         tiles = _run_search(page, search_query)
 
-        found = _find_exact_match(tiles, product_name)
+        found = _find_matching_tile(tiles, product_name, product_id)
         if found is None:
-            msg = (
-                f"No search result exactly matches {product_name!r}. Call "
-                "search_products first and pass one of its product names "
-                "exactly, including capitalisation and punctuation."
-            )
+            if product_id is not None:
+                msg = (
+                    f"No search result has id {product_id!r}. Call "
+                    "search_products first and pass one of its results' "
+                    "`id` (or its `name` exactly, if it has none)."
+                )
+            else:
+                msg = (
+                    f"No search result exactly matches {product_name!r}. Call "
+                    "search_products first and pass one of its product names "
+                    "exactly, including capitalisation and punctuation - or "
+                    "its `id` instead."
+                )
             raise RuntimeError(msg)
         tile, matched_name = found
 

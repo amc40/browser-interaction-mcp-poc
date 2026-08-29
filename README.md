@@ -71,22 +71,30 @@ docstring for the detail.
 requires an exact `product_name`, matched against a result tile's heading
 (whitespace aside), and raises rather than guess if nothing matches. A third
 tool, `sainsburys_search`, exists to produce that name - a read-only search
-that returns the top 5 matches' names and image URLs, for the model to show
-the person as a Markdown list with the images inlined so they can pick before
-anything is added. An index into that list isn't accepted instead, because it
-can go stale between the two calls (the site can re-rank or re-stock in
-between) in a way a name can't. Both tools share the same
-"authenticate, run the search, read a tile's name" code (`sainsburys.py`'s
-`_authenticated_page`, `_run_search`, `_product_match`) so they can't drift
-into disagreeing about what a given search actually returns.
+that returns the top 5 matches' names, ids and image URLs, for the model to
+show the person as a Markdown list with the images inlined so they can pick
+before anything is added. An index into that list isn't accepted instead,
+because it can go stale between the two calls (the site can re-rank or
+re-stock in between) in a way a name can't. Both tools share the same
+"authenticate, run the search, read a tile's name/id/image" code
+(`sainsburys.py`'s `_authenticated_page`, `_run_search`, `_product_match`) so
+they can't drift into disagreeing about what a given search actually returns.
+
+Each result also carries an `id` - Sainsbury's own id for the tile, read from
+its `data-testid="product-tile-<id>"` - and `sainsburys_add_to_basket` accepts
+it as an optional `product_id`. Passing it, when a result has one, is the more
+robust way to add: it names that exact product directly, so unlike
+`product_name` it's never affected by anything happening to a name between
+`sainsburys_search` returning it and it being copied back in.
 
 If a `product_name` itself ends in "..." or "…" - the shape of a name some
 *other* surface truncated (a chat client rendering a long tool result, say)
 before it was copied back in - an exact match can never succeed no matter how
-it's typed. `add_to_basket` falls back to a prefix match against the text
-before the ellipsis for exactly that case, searches on the cleaned-up text
-(a query ending in literal ellipsis characters wouldn't find much on the real
-site's own search either), and reports back the product's real, full name.
+it's typed. Without a `product_id` to fall back on, `add_to_basket` falls back
+to a prefix match against the text before the ellipsis for exactly that case,
+searches on the cleaned-up text (a query ending in literal ellipsis characters
+wouldn't find much on the real site's own search either), and reports back the
+product's real, full name.
 
 **`sainsburys_add_to_basket` is still unverified end to end.** Its selectors
 are drawn from a real recording rather than invented, but nobody has run it

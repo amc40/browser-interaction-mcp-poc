@@ -54,6 +54,15 @@ class ProductSearchResult(BaseModel):
     """One product returned by a Sainsbury's search, unadded."""
 
     name: str = Field(description="Product name, exactly as shown on its result tile.")
+    id: str | None = Field(
+        description=(
+            "This result's own id on Sainsbury's site, if one could be read from "
+            "its result tile. Prefer passing this as `sainsburys_add_to_basket`'s "
+            "`product_id` over retyping `name` - it names this exact product, so "
+            "it isn't affected by `name` getting truncated or altered wherever "
+            "you're shown it before you pass it back."
+        ),
+    )
     image_url: str | None = Field(
         description=(
             "URL of the product's image, if one could be read from its result tile."
@@ -146,12 +155,12 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
     ) -> ProductSearchResults:
         """Search Sainsbury's and return the top 5 matches, without adding any.
 
-        Nothing is added to the basket - call this first to see what a
-        query actually matches, then pass one result's `name` *exactly* to
-        `sainsburys_add_to_basket`. Present the results to the person as a
-        Markdown list with each `image_url` inlined
-        (`![name](image_url)`) so they can see titles and pictures before
-        choosing, rather than picking on their behalf.
+        Nothing is added to the basket - call this first to see what a query
+        actually matches, then pass one result to `sainsburys_add_to_basket`:
+        its `id`, if it has one, or otherwise its `name` *exactly*. Present
+        the results to the person as a Markdown list with each `image_url`
+        inlined (`![name](image_url)`) so they can see titles and pictures
+        before choosing, rather than picking on their behalf.
 
         `query` is only ever typed into Sainsbury's own site search, exactly
         as a person would - it cannot reach a page, selector or script this
@@ -167,7 +176,9 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         )
         return ProductSearchResults(
             results=[
-                ProductSearchResult(name=match.name, image_url=match.image_url)
+                ProductSearchResult(
+                    name=match.name, id=match.id, image_url=match.image_url
+                )
                 for match in product_matches
             ],
         )
@@ -179,20 +190,28 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
             "openWorldHint": True,
         },
     )
-    def sainsburys_add_to_basket(product_name: str) -> AddedToBasket:
-        """Search Sainsbury's for `product_name` and add the exact match.
+    def sainsburys_add_to_basket(
+        product_name: str, product_id: str | None = None
+    ) -> AddedToBasket:
+        """Search Sainsbury's for a `sainsburys_search` result and add it.
 
-        `product_name` must be the exact name of one of `sainsburys_search`'s
-        results (whitespace aside) - not a description, not an index. An
-        index isn't accepted because it can go stale between the two calls
-        (the site can re-rank or re-stock in between); the exact name can't.
-        Call `sainsburys_search` first if you don't already have one.
+        Not a description, not an index - an index isn't accepted because it
+        can go stale between the two calls (the site can re-rank or re-stock
+        in between). Call `sainsburys_search` first if you don't already
+        have a result to pass in, and identify it one of two ways:
 
-        If the name you have was itself cut short somewhere and ends in
-        "..." or "…" (e.g. it was truncated by whatever displayed
-        `sainsburys_search`'s results to you), pass it as-is rather than
-        guessing at the rest - it's matched as a prefix against the real
-        result, and the response reports the product's real, full name.
+        - `product_id`, the result's own `id`, if it had one - prefer this.
+          It names that exact product, so it isn't affected by `product_name`
+          getting truncated or otherwise altered wherever it was shown to
+          you before you passed it back.
+        - Otherwise, `product_name` must be the exact name of the result
+          (whitespace aside). If the name you have was itself cut short
+          somewhere and ends in "..." or "…", pass it as-is rather than
+          guessing at the rest - it's matched as a prefix against the real
+          result.
+
+        Either way, the response reports the product's real, full name -
+        not necessarily `product_name` itself.
 
         `product_name` is only ever typed into Sainsbury's own site search,
         exactly as a person would - it cannot reach a page, selector or
@@ -208,7 +227,9 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         """
         product = _guard_session(
             lambda: sainsburys.add_to_basket(
-                product_name, storage_state_path=_require_storage_state()
+                product_name,
+                product_id=product_id,
+                storage_state_path=_require_storage_state(),
             ),
         )
         return AddedToBasket(product=product)
