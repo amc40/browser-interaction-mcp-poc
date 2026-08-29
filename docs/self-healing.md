@@ -1,9 +1,11 @@
 # Self-healing browser actions
 
-**Status: proposed, nothing built.** No browser is driven yet, so nothing here
-can be validated against a real failure. This document exists to fix the shape
-of the mechanism — and, more importantly, its boundaries — before any of it is
-written.
+**Status: proposed, nothing built.** Written before any browser was driven, so
+nothing here had been validated against a real failure. This document exists to
+fix the shape of the mechanism — and, more importantly, its boundaries — before
+any of it is written. The staged implementation plan that follows from it, and
+the points where the infrastructure built since has overtaken its assumptions,
+are in [`self-healing-plan.md`](self-healing-plan.md).
 
 ## The problem
 

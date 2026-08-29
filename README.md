@@ -109,6 +109,8 @@ Browser actions go stale as pages change.
 reads a redacted capture of the failure and opens a PR against the selectors —
 with no credentials for the automated service, no route to it, and no path to
 what the server runs.
+[`docs/self-healing-plan.md`](docs/self-healing-plan.md) is the staged plan for
+building it against the infrastructure that now exists.
 
 ## Getting started
 
