@@ -45,7 +45,7 @@ def main(argv: list[str]) -> int:
 
     for match in matches:
         image = match.image_url or "no image"
-        print(f"{match.name}  [id={match.id or 'none'}]  ({image})")
+        print(f"{match.name}  [id={match.id}]  ({image})")
     return 0
 
 

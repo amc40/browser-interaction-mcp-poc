@@ -94,7 +94,7 @@ async def test_sainsburys_search_wires_to_the_browser_action(
                 image_url="https://example.invalid/digestives.jpg",
             ),
             sainsburys.ProductMatch(
-                name="Semi Skimmed Milk 2L", id=None, image_url=None
+                name="Semi Skimmed Milk 2L", id="7654321", image_url=None
             ),
         ]
 
@@ -109,7 +109,7 @@ async def test_sainsburys_search_wires_to_the_browser_action(
             "1234567",
             "https://example.invalid/digestives.jpg",
         ),
-        ("Semi Skimmed Milk 2L", None, None),
+        ("Semi Skimmed Milk 2L", "7654321", None),
     ]
     assert seen_calls == [("chocolate", storage_state_path)]
 

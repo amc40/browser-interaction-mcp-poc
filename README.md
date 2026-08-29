@@ -81,17 +81,19 @@ re-stock in between) in a way a name can't. Both tools share the same
 they can't drift into disagreeing about what a given search actually returns.
 
 Each result also carries an `id` - Sainsbury's own id for the tile, read from
-its `data-testid="product-tile-<id>"` - and `sainsburys_add_to_basket` accepts
-it as an optional `product_id`. Passing it, when a result has one, is the more
-robust way to add: it names that exact product directly, so unlike
-`product_name` it's never affected by anything happening to a name between
-`sainsburys_search` returning it and it being copied back in.
+its `data-testid="product-tile-<id>"` (a tile whose id can't be read this way
+is treated as unreadable and skipped, same as one with no name heading at
+all, so a `ProductMatch`/result that does come back always has one) - and
+`sainsburys_add_to_basket` accepts it as an optional `product_id`. Passing it
+is the more robust way to add: it names that exact product directly, so
+unlike `product_name` it's never affected by anything happening to a name
+between `sainsburys_search` returning it and it being copied back in.
 
 If a `product_name` itself ends in "..." or "…" - the shape of a name some
 *other* surface truncated (a chat client rendering a long tool result, say)
 before it was copied back in - an exact match can never succeed no matter how
-it's typed. Without a `product_id` to fall back on, `add_to_basket` falls back
-to a prefix match against the text before the ellipsis for exactly that case,
+it's typed. Without a `product_id` given, `add_to_basket` falls back to a
+prefix match against the text before the ellipsis for exactly that case,
 searches on the cleaned-up text (a query ending in literal ellipsis characters
 wouldn't find much on the real site's own search either), and reports back the
 product's real, full name.

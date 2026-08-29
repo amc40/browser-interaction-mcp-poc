@@ -54,13 +54,12 @@ class ProductSearchResult(BaseModel):
     """One product returned by a Sainsbury's search, unadded."""
 
     name: str = Field(description="Product name, exactly as shown on its result tile.")
-    id: str | None = Field(
+    id: str = Field(
         description=(
-            "This result's own id on Sainsbury's site, if one could be read from "
-            "its result tile. Prefer passing this as `sainsburys_add_to_basket`'s "
-            "`product_id` over retyping `name` - it names this exact product, so "
-            "it isn't affected by `name` getting truncated or altered wherever "
-            "you're shown it before you pass it back."
+            "This result's own id on Sainsbury's site. Prefer passing this as "
+            "`sainsburys_add_to_basket`'s `product_id` over retyping `name` - it "
+            "names this exact product, so it isn't affected by `name` getting "
+            "truncated or altered wherever you're shown it before you pass it back."
         ),
     )
     image_url: str | None = Field(
@@ -200,10 +199,10 @@ def register_tools(mcp: FastMCP, settings: Settings, version: str) -> None:
         in between). Call `sainsburys_search` first if you don't already
         have a result to pass in, and identify it one of two ways:
 
-        - `product_id`, the result's own `id`, if it had one - prefer this.
-          It names that exact product, so it isn't affected by `product_name`
-          getting truncated or otherwise altered wherever it was shown to
-          you before you passed it back.
+        - `product_id`, the result's own `id` - prefer this. It names that
+          exact product, so it isn't affected by `product_name` getting
+          truncated or otherwise altered wherever it was shown to you
+          before you passed it back.
         - Otherwise, `product_name` must be the exact name of the result
           (whitespace aside). If the name you have was itself cut short
           somewhere and ends in "..." or "…", pass it as-is rather than

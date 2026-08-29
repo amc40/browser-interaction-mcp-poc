@@ -223,8 +223,8 @@ class ProductMatch:
     """One product tile read from a Sainsbury's search results page."""
 
     name: str
+    id: str
     image_url: str | None
-    id: str | None
 
 
 def _consent_cookies() -> list[dict[str, object]]:
@@ -481,13 +481,14 @@ _MAX_RESULT_TILES = 60
 
 
 def _tile_id(tile: Locator) -> str | None:
-    """Return the id embedded in a tile's own `data-testid`, best-effort.
+    """Return the id embedded in a tile's own `data-testid`, or ``None``.
 
     `_PRODUCT_TILE_SELECTOR` already guarantees the attribute exists and
-    starts with `_TILE_ID_PREFIX` for anything reaching this function - but,
-    like `image_url` below, parsed defensively rather than trusting that
-    never changes. ``None`` if the attribute is missing or doesn't have the
-    expected shape, same as a tile with no image gets `image_url=None`.
+    starts with `_TILE_ID_PREFIX` for anything reaching this function - but
+    parsed defensively rather than trusting that never changes. ``None`` here
+    means `_product_match` treats the whole tile as unreadable, the same as
+    a tile whose name heading never appears - `id` is never optional on a
+    `ProductMatch` that does get returned.
     """
     raw = tile.get_attribute("data-testid")
     if raw is None or not raw.startswith(_TILE_ID_PREFIX):
@@ -496,14 +497,16 @@ def _tile_id(tile: Locator) -> str | None:
 
 
 def _product_match(tile: Locator) -> ProductMatch | None:
-    """Read one tile's product name, image and id, or ``None`` if it isn't one.
+    """Read one tile's product name, id and image, or ``None`` if it isn't one.
 
     The one place any of the three is read: `add_to_basket`'s matching
     lookup (`_find_matching_tile`) reuses this for `name` and `id` so a
     tile's name can't be read one way for display and another way for
-    matching. Returns ``None`` - rather than blocking on `inner_text` for the
-    full default timeout - for a tile whose name heading never appears; see
-    `_TILE_HEADING_TIMEOUT_MS`.
+    matching. Returns ``None`` for a tile whose name heading never appears -
+    rather than blocking on `inner_text` for the full default timeout, see
+    `_TILE_HEADING_TIMEOUT_MS` - or whose id can't be read; both are treated
+    as "not a product", the same as a sponsored slot lacking a name heading
+    at all.
     """
     heading = tile.get_by_role("heading").first
     try:
@@ -513,9 +516,12 @@ def _product_match(tile: Locator) -> ProductMatch | None:
     name = heading.inner_text().strip()
     if not name:
         return None
+    tile_id = _tile_id(tile)
+    if tile_id is None:
+        return None
     image = tile.locator("img").first
     image_url = image.get_attribute("src") if image.count() > 0 else None
-    return ProductMatch(name=name, image_url=image_url, id=_tile_id(tile))
+    return ProductMatch(name=name, id=tile_id, image_url=image_url)
 
 
 def _readable_matches(tiles: Locator) -> Iterator[ProductMatch]:

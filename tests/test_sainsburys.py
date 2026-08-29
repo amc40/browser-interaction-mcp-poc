@@ -47,9 +47,10 @@ class FakeLocator:
     image_src: str | None = "https://example.invalid/product.jpg"
     has_image: bool = True
     # This tile's own id, as it would appear in `data-testid="product-tile-<id>"`.
-    # `None` (the default) means "no id wired for this test", not "the real
-    # tile carries no data-testid" - see `get_attribute`.
-    tile_id: str | None = None
+    # Defaulted rather than `None`, since a real product tile always has one -
+    # `_product_match` treats a tile it can't read an id from as unreadable,
+    # same as one with no name heading. Set to `None` only to simulate that.
+    tile_id: str | None = "9999999"
 
     @property
     def first(self) -> FakeLocator:
@@ -443,22 +444,25 @@ def test_search_products_returns_names_ids_and_image_urls_in_order(
     assert page.search_box.pressed_keys == ["Enter"]
 
 
-def test_search_products_reports_no_id_when_the_tile_has_none(
+def test_search_products_skips_a_tile_whose_id_cannot_be_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A tile without a readable id is still a valid, addable-by-name result."""
+    """A tile without a readable id is treated as unreadable.
+
+    Same as one with no name heading at all - `id` is never optional on a
+    returned match.
+    """
     page = FakePage(
         product_tiles=[
-            FakeLocator(heading=FakeLocator(text="No Id Product"), has_image=False)
+            FakeLocator(heading=FakeLocator(text="No Id Product"), tile_id=None),
+            FakeLocator(heading=FakeLocator(text="Real Product"), tile_id="1234567"),
         ]
     )
     _wire(monkeypatch, page)
 
     results = sainsburys.search_products(storage_state_path=Path("session.json"))
 
-    assert results == [
-        sainsburys.ProductMatch(name="No Id Product", id=None, image_url=None)
-    ]
+    assert [match.name for match in results] == ["Real Product"]
 
 
 def test_search_products_honours_a_smaller_count(
@@ -504,7 +508,7 @@ def test_search_products_reports_no_image_when_the_tile_has_none(
     results = sainsburys.search_products(storage_state_path=Path("session.json"))
 
     assert results == [
-        sainsburys.ProductMatch(name="No Photo Product", id=None, image_url=None)
+        sainsburys.ProductMatch(name="No Photo Product", id="9999999", image_url=None)
     ]
 
 
