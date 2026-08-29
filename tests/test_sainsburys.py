@@ -444,25 +444,24 @@ def test_search_products_returns_names_ids_and_image_urls_in_order(
     assert page.search_box.pressed_keys == ["Enter"]
 
 
-def test_search_products_skips_a_tile_whose_id_cannot_be_read(
+def test_search_products_raises_when_a_readable_tile_has_no_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A tile without a readable id is treated as unreadable.
+    """A name-bearing tile with no readable id signals changed markup.
 
-    Same as one with no name heading at all - `id` is never optional on a
-    returned match.
+    Unlike a tile with no name heading at all (routinely a sponsored slot,
+    silently skipped), one that does read a name but can't produce an id is
+    treated as a hard failure - `id` is never optional on a returned match.
     """
     page = FakePage(
         product_tiles=[
             FakeLocator(heading=FakeLocator(text="No Id Product"), tile_id=None),
-            FakeLocator(heading=FakeLocator(text="Real Product"), tile_id="1234567"),
         ]
     )
     _wire(monkeypatch, page)
 
-    results = sainsburys.search_products(storage_state_path=Path("session.json"))
-
-    assert [match.name for match in results] == ["Real Product"]
+    with pytest.raises(RuntimeError, match=r"No Id Product.*no id"):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
 
 
 def test_search_products_honours_a_smaller_count(

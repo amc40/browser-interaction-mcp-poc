@@ -448,8 +448,9 @@ def search_products(
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
-        RuntimeError: If no results are found, or results rendered but no
-            product name could be read from any of them.
+        RuntimeError: If no results are found, results rendered but no
+            product name could be read from any of them, or a tile a name
+            *was* read from had no readable id (see `_product_match`).
     """
     with _authenticated_page(storage_state_path) as page:
         tiles = _run_search(page, query)
@@ -486,9 +487,11 @@ def _tile_id(tile: Locator) -> str | None:
     `_PRODUCT_TILE_SELECTOR` already guarantees the attribute exists and
     starts with `_TILE_ID_PREFIX` for anything reaching this function - but
     parsed defensively rather than trusting that never changes. ``None`` here
-    means `_product_match` treats the whole tile as unreadable, the same as
-    a tile whose name heading never appears - `id` is never optional on a
-    `ProductMatch` that does get returned.
+    means `_product_match` raises rather than silently reporting a match with
+    no id, since - unlike a tile with no name heading, which is routinely a
+    sponsored slot or similar - a *readable* product tile with no parseable
+    id is a sign the markup itself has changed underneath the selector's
+    assumption, not a normal "not a product" case.
     """
     raw = tile.get_attribute("data-testid")
     if raw is None or not raw.startswith(_TILE_ID_PREFIX):
@@ -502,11 +505,16 @@ def _product_match(tile: Locator) -> ProductMatch | None:
     The one place any of the three is read: `add_to_basket`'s matching
     lookup (`_find_matching_tile`) reuses this for `name` and `id` so a
     tile's name can't be read one way for display and another way for
-    matching. Returns ``None`` for a tile whose name heading never appears -
-    rather than blocking on `inner_text` for the full default timeout, see
-    `_TILE_HEADING_TIMEOUT_MS` - or whose id can't be read; both are treated
-    as "not a product", the same as a sponsored slot lacking a name heading
-    at all.
+    matching. Returns ``None`` - rather than blocking on `inner_text` for the
+    full default timeout - for a tile whose name heading never appears; see
+    `_TILE_HEADING_TIMEOUT_MS`. That's routine (a sponsored slot, a
+    "browse the aisle" card), so it's skipped rather than raised.
+
+    Raises:
+        RuntimeError: If a name *was* read but no id could be - `id` is never
+            optional on a `ProductMatch` this returns, and unlike a missing
+            name this isn't an expected shape for a real result tile to have;
+            see `_tile_id`.
     """
     heading = tile.get_by_role("heading").first
     try:
@@ -518,7 +526,11 @@ def _product_match(tile: Locator) -> ProductMatch | None:
         return None
     tile_id = _tile_id(tile)
     if tile_id is None:
-        return None
+        msg = (
+            f"Read a product name ({name!r}) from a result tile but no id from "
+            "its data-testid - the results page markup has probably changed."
+        )
+        raise RuntimeError(msg)
     image = tile.locator("img").first
     image_url = image.get_attribute("src") if image.count() > 0 else None
     return ProductMatch(name=name, id=tile_id, image_url=image_url)
@@ -674,7 +686,9 @@ def add_to_basket(
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
         RuntimeError: If no results are found, none match `product_id` or
-            `product_name`, or the matching result has no "add" control.
+            `product_name`, the matching result has no "add" control, or a
+            tile a name *was* read from had no readable id (see
+            `_product_match`).
     """
     with _authenticated_page(storage_state_path) as page:
         # A query ending in literal ellipsis characters wouldn't find much on
