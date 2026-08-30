@@ -84,6 +84,65 @@ something the snapshot could not show; a second person with merge rights; or
 auto-merge appearing on any branch. The first of those is also the last open
 question at the end of this document, and the two should be revisited together.
 
+### Secrets in the evidence
+
+This is the risk worth spending the most effort on, because it is the only one
+in this document that is **irreversible**: the repository is public, and a
+commit that carries a token is world-readable, forked, cached and permanent. No
+later cleanup makes it un-leaked. Everything below is therefore arranged so that
+the sensitive form of the evidence is never in reach of the thing that publishes
+it, rather than so that a step remembers to clean it.
+
+What can actually be in a capture of a logged-in page:
+
+| Class | Where it hides | Handling |
+| --- | --- | --- |
+| Session cookies, `Authorization` / `Cookie` / `Set-Cookie` | Trace network entries, storage state | **Never captured.** Not redacted afterwards — the bundle builder has no code path that reads them |
+| Tokens in the markup | Hydration blobs (`window.__INITIAL_STATE__`), CSRF `<meta>` tags, hidden inputs, `data-*` attributes, `?token=`/`?sid=` in link URLs | **Drop `<script>`, `<template>`, inline `on*` handlers and every `<meta>` but charset, wholesale**, strip query strings and fragments from every URL, and keep only allowlisted attributes. None of that is needed to resolve a locator, so dropping it costs nothing |
+| The operator's own credentials | Anywhere | `redaction.build_redactor(settings)`, which already covers every `SecretStr` in every encoding. **Note the gap:** a password typed into `/sainsburys-login` never reaches `Settings`, so the redactor does not know it. The "scrub every input `value`, `textarea` and `contenteditable`" rule is what covers it, and it has to be unconditional for that reason |
+| Personal data — name, address, orders, basket | Text nodes, `alt`/`title`/`aria-label` | The subtree rule, plus committing the failing action's subtree rather than the page. Not a secret, still not publishable |
+
+Four structural controls, in the order they act:
+
+1. **Redact at the source, and never keep the raw.** The trace is written inside
+   the browser worker's own state directory ([`deployment.md`
+   §8](deployment.md)), the redactor consumes it there, and the raw file is
+   deleted in the same operation that produces the bundle. Nothing that can
+   upload, commit or serve a file ever has a path to an unredacted capture. This
+   is the control that matters; the rest are nets under it.
+2. **Allowlist everywhere, blocklist nowhere.** Attributes, element types and
+   URL parts are all opt-in. A blocklist would have to know that
+   `data-account-email` exists before it could drop it.
+3. **A publish gate that fails closed.** `gitleaks` is already a pre-commit hook
+   and a CI job; point it at the bundle on the Pi as part of building it, and add
+   a fixture check to CI that rejects a snapshot containing `<script`, a
+   `Set-Cookie`/`Bearer` string, a URL query string, or one over a size cap. Be
+   honest about its strength: gitleaks matches known credential shapes, not a
+   bespoke session cookie, so it catches carelessness, not everything.
+4. **A human reads the fixture before it is pushed** — which is only realistic
+   because the fixture is a subtree rather than a page. "Too big to read" and
+   "safe to publish" are not compatible states, and if a fixture cannot be cut
+   down to something readable, that is the signal to use the private-repository
+   fallback rather than to skim it.
+
+Two properties worth naming because they are the reason this is tractable:
+
+- **The published picture is derived from the redacted fixture, never from the
+  live page.** Redaction happens once, on text, in one place; the render can only
+  show what survived it. That is why a screenshot needs no second redaction pass
+  of its own — pixels cannot leak what the DOM no longer contains.
+- **The blast radius of a leaked Sainsbury's session is recoverable**, unlike
+  most secrets: signing out and rerunning the login invalidates it. Cheap
+  rotation is a real mitigation, and worth keeping cheap. Plan for it as the
+  response rather than assuming detection: if a bundle turns out to have carried
+  a token, rotate first, then work out how it got through.
+
+**The residual, stated plainly:** the model sees the fixture. The Anthropic API
+is an outbound channel by construction — the design says so — and redaction
+governs what travels with the prompt, nothing else. A capture reduced to the
+subtree of one control, with scripts and metadata gone, is a small enough thing
+to be comfortable about; a full-page trace never would be.
+
 ### Screenshots, and the fact that this repository is public
 
 "Screenshot" covers three different artefacts with three different audiences,
