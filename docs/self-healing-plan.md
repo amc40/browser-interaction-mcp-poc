@@ -15,7 +15,7 @@ browser profile.
 
 | Design assumed | Repository now | Consequence |
 | --- | --- | --- |
-| "The Pi pulls from `main` at deploy time only, driven by hand… no webhook, no polling" — the load-bearing half of I2 | `ci.yml`'s `deploy` job HMAC-signs a request to `deploy_webhook.py` on every green push to `main` | **Merge is deploy.** A merged heal PR reaches the live browser in seconds. The human deploy step the design leaned on no longer exists |
+| "The Pi pulls from `main` at deploy time only, driven by hand… no webhook, no polling" — the load-bearing half of I2 | `ci.yml`'s `deploy` job HMAC-signs a request to `deploy_webhook.py` on every green push to `main`. `main` is a protected branch, so who may merge is still settled | **Merge is deploy.** A merged heal PR reaches the live browser in seconds; there is no "merged but not yet live" state. Protection answers *who* merges, not what happens the instant they do. See below — the gap is real, and deliberately left open for now |
 | Locators would be split from actions "when browser actions are first written" | They were not. Test ids, the search-box name, the tile selector and the heading patterns are module constants in `sainsburys.py`, read directly by control flow (`_raise_if_not_logged_in` decides login state from `_USERNAME_TEST_ID`) | The narrow diff surface — the thing that makes the review tractable and the CI check possible — is a prerequisite, not a detail |
 | A trace is captured on failure | `browser_page` starts no tracing. The only artefact on any failure path is the login screenshot in `_raise_if_not_logged_in` | Nothing to bundle. Capture is the first new code |
 | `redaction.py` covers the credentials | It does, and only those: `SecretRedactor` replaces known secret *values* in log records. There is no DOM redactor | The bundle builder reuses it, as planned, but the attribute allowlist and text-node rule are all still to write |
@@ -43,20 +43,46 @@ against the real site.** Newly written actions start outside it and are promoted
 by a real run, which also keeps the fixture corpus honest — every healable
 locator has at least one snapshot of the page as it looked when it worked.
 
-### The deploy gate, second
+### The deploy gate: recorded, not built
 
-This is the one genuinely new risk. The design's I2 rests on "a human merges
-*and* a human deploys"; the webhook has since collapsed those into one click.
-Options, on a repository where the operator is also the only reviewer:
+The design's I2 rests on "a human merges *and* a human deploys"; the webhook has
+since collapsed those into one click. Written down because it is a real change
+to a load-bearing assumption — not because it is being acted on yet.
 
-| Option | Verdict |
+**Decision: no additional deploy gate for now.** Two things carry the weight
+instead, and the reasoning is that they are strictly better uses of the same
+human attention:
+
+- `main` is protected, and the healing session can only push `claude/**` and
+  cannot merge at all. (Worth confirming *"do not allow bypassing the above
+  settings"* is on, or the protection binds everyone except the person actually
+  merging.)
+- The heal PR's review is made substantive rather than ceremonial by stage 2's
+  artefacts: the diff touches only the locator table, the replay proves the new
+  locator resolves to exactly one element, and the rendered outline shows *which*
+  element. A gate that pauses a deploy adds nothing a reviewer can act on; a
+  picture of the matched element does.
+
+Where an end-to-end check is wanted before a heal goes live, the existing manual
+path is the better instrument and needs no new machinery: publish the heal
+branch to the Pi with `deploy/deploy-branch.sh` and run the failing tool once
+against the real site *before* merging. That tests the thing snapshot replay
+structurally cannot — the design is explicit that only the operator running it
+for real establishes end-to-end behaviour — for the same effort as clicking an
+approval.
+
+The options, kept for the record:
+
+| Option | Note |
 | --- | --- |
-| Accept it — review is the gate | Rejected. It makes an approving click on a selector diff the sole thing between a model's output and the live logged-in browser, which is exactly the review most likely to be rubber-stamped |
-| Drop the webhook, go back to manual deploys | Rejected. It punishes every ordinary change for a mechanism that fires rarely |
-| **Split the `deploy` job: skip the webhook when the merged commit touches the locator table, and require an explicit `workflow_dispatch` (or a GitHub Environment approval) for those** | **Chosen.** The fast path keeps its speed; the class of change the agent can author is the one class that still needs a deliberate second action. The condition is a path check on the commit, so it holds whoever authored the change |
+| **Nothing extra; protection plus a substantive review** | **Current choice.** Cheapest, and it puts the effort where it changes an outcome |
+| Split the `deploy` job: skip the webhook when the merged commit touches the locator table, require an explicit `workflow_dispatch` or Environment approval for those | The gate to build *if* one is wanted. Path-conditioned, so it holds whoever authored the change, and it leaves the fast path alone for ordinary commits |
+| Drop the webhook, go back to manual deploys | Rejected. Punishes every ordinary change for a mechanism that fires rarely |
 
-That gate lands in stage 3, before any heal PR is opened — not in stage 4 with
-the rest of the trigger plumbing.
+**What would change the decision:** a heal that merges, deploys and breaks
+something the snapshot could not show; a second person with merge rights; or
+auto-merge appearing on any branch. The first of those is also the last open
+question at the end of this document, and the two should be revisited together.
 
 ## Stages
 
@@ -138,9 +164,8 @@ anything depends on it.
 **Done when:** a wrong-but-plausible locator (points at the tile's price rather
 than its add button) fails the job, and the outline image shows why.
 
-### Stage 3 — heal by hand, and close the deploy gate
+### Stage 3 — heal by hand
 
-- The deploy-gate split described above.
 - The agent runs **on the operator's laptop, on demand**, against a bundle
   fetched from the Pi — the design's "workable, not chosen" option, used here as
   the rehearsal. It writes the branch, the fixture and the PR; CI runs the
@@ -149,8 +174,13 @@ than its add button) fails the job, and the outline image shows why.
   get their first contact with a real failure while the trigger infrastructure
   does not yet exist. Everything learned here is cheap to change.
 
-**Done when:** one genuine locator breakage has been healed this way, reviewed,
-merged and deployed through the gate.
+- Before merging: publish the branch to the Pi with `deploy/deploy-branch.sh`
+  and run the failing tool once against the real site. This is the end-to-end
+  check, in place of a deploy gate, and it is a habit worth forming here while
+  the volume is one PR.
+
+**Done when:** one genuine locator breakage has been healed this way, run
+against the real site from the branch, reviewed and merged.
 
 ### Stage 4 — the automatic trigger
 
