@@ -164,23 +164,53 @@ anything depends on it.
 **Done when:** a wrong-but-plausible locator (points at the tile's price rather
 than its add button) fails the job, and the outline image shows why.
 
-### Stage 3 — heal by hand
+### Stage 3 — heal by hand, in a cloud session
 
-- The agent runs **on the operator's laptop, on demand**, against a bundle
-  fetched from the Pi — the design's "workable, not chosen" option, used here as
-  the rehearsal. It writes the branch, the fixture and the PR; CI runs the
-  diff-surface check, the replay and `make check` exactly as it would later.
-- What this is for: the prompt, the bundle contents and the review artefact all
-  get their first contact with a real failure while the trigger infrastructure
-  does not yet exist. Everything learned here is cheap to change.
+The design's options table lists "operator's laptop, on demand" as workable but
+not chosen, because it is just the operator debugging. A **cloud session**
+(`claude --cloud`, resumable from claude.ai/code on a phone) is the better
+rehearsal on both counts: it is the same off-host, credential-free environment
+stage 4 will fire automatically, so what is learned here transfers instead of
+being thrown away — and the iteration loop is reachable from a phone, which is
+the point of doing it this way.
 
+It also *strengthens* I1 rather than bending it. The laptop is the machine that
+holds SSH access to the Pi and a working route to the real site; the cloud
+session has neither, and can be configured so it never can.
+
+- **Environment, built once and reused by stage 4:** repository attached,
+  connector list **explicitly empty**, network `None`. Empty connectors is the
+  design's sharpest point — connector traffic bypasses the network setting
+  entirely, so a Slack or Notion connector left on is an egress path for page
+  content that the network policy will not show.
+- **One new hazard the laptop framing hid:** these environments ship Chromium
+  preinstalled. A session with a browser *and* network access is one navigation
+  away from the live site, which is exactly what I1 forbids. Network `None` is
+  what makes "it could not reach the site if it tried" true rather than
+  intended — so it is a requirement here, not a hardening option.
+- **That same Chromium is what makes the session useful:** the agent can run the
+  snapshot replay itself, against `file://`, and iterate before pushing anything
+  — the design's "agent with read-only tools over the snapshot" level, reached
+  early and for free, with CI still re-running the same checks on the PR.
+- **How the bundle gets in**, given network `None` and no route to the Pi: the
+  operator fetches it from the Pi over the existing SSH path, reads the redacted
+  snapshot once, and commits it to a `claude/heal-*` branch as the fixture. The
+  session then only ever sees repository content. This costs one laptop hop per
+  heal and buys three things: no bundle store to design yet, no allowlist entry,
+  and the redaction review the design insists on happening — by a human, before
+  anything leaves the Pi — as a step nobody can skip. Every turn after that hop
+  is phone-workable.
+- **Review from a phone raises the stakes on the artefacts.** A selector diff on
+  a small screen is barely reviewable; the outlined-match screenshot is. Stage 2
+  is therefore a hard prerequisite for stage 3, not a nice-to-have alongside it.
 - Before merging: publish the branch to the Pi with `deploy/deploy-branch.sh`
   and run the failing tool once against the real site. This is the end-to-end
   check, in place of a deploy gate, and it is a habit worth forming here while
-  the volume is one PR.
+  the volume is one PR. It needs the laptop, and it is the one step that should.
 
-**Done when:** one genuine locator breakage has been healed this way, run
-against the real site from the branch, reviewed and merged.
+**Done when:** one genuine locator breakage has been healed this way — bundle
+committed from the laptop, the fix iterated from a phone, run against the real
+site from the branch, reviewed and merged.
 
 ### Stage 4 — the automatic trigger
 
@@ -190,9 +220,10 @@ the baseline rule above — which the login and search-and-add paths already do.
 - Pi side: on a healable failure, upload the bundle and POST the manifest to a
   routine's API trigger. The HMAC-signed, size-capped, single-purpose shape of
   `deploy_webhook.py` is the precedent to copy — in the other direction.
-- Session side: connector list **explicitly empty** (the design's sharpest
-  point: connector traffic bypasses the network setting entirely), network
-  `None` plus at most one allowlisted bundle host, branch `claude/heal-<fp>`.
+- Session side: the stage 3 environment unchanged — empty connectors, network
+  `None` — plus at most one allowlisted bundle host if the bundle cannot ride in
+  the fire text, and branch `claude/heal-<fp>`. The only genuinely new pieces
+  are the trigger and whatever replaces the operator's laptop hop.
 - Caps: one open PR per fingerprint, superseding rather than stacking; a second
   failure on a fingerprint whose heal already merged stops healing and pages the
   operator; the tool is quarantined meanwhile so a retrying client gets a clear
@@ -220,9 +251,11 @@ The design doc's open questions survive, minus the one stage 1 is built to
 answer. Two now have sharper edges:
 
 - **Where bundles live** only becomes a question at stage 4. Stages 1–3 keep
-  them on the Pi, which is the same trust boundary as the profile they came
-  from. If the routine's fire text can carry a capped, gzipped manifest plus a
-  single DOM snapshot, the storage question may never need answering.
+  them on the Pi and move one by hand, which is the same trust boundary as the
+  profile they came from. If the routine's fire text can carry a capped,
+  gzipped manifest plus a single DOM snapshot, the storage question may never
+  need answering — and the human redaction review that the manual hop enforces
+  will need replacing with something deliberate when it goes.
 - **How to notice the mechanism failing quietly** — a heal that merges, deploys
   and breaks something the snapshot could not show. With merge-to-deploy now
   automatic, this matters more than it did when the design was written, and
