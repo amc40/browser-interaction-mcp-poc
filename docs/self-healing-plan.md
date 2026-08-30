@@ -59,8 +59,8 @@ human attention:
   merging.)
 - The heal PR's review is made substantive rather than ceremonial by stage 2's
   artefacts: the diff touches only the locator table, the replay proves the new
-  locator resolves to exactly one element, and the rendered outline shows *which*
-  element. A gate that pauses a deploy adds nothing a reviewer can act on; a
+  locator resolves to exactly one element, and the cropped outline render shows
+  *which* element. A gate that pauses a deploy adds nothing a reviewer can act on; a
   picture of the matched element does.
 
 Where an end-to-end check is wanted before a heal goes live, the existing manual
@@ -83,6 +83,47 @@ The options, kept for the record:
 something the snapshot could not show; a second person with merge rights; or
 auto-merge appearing on any branch. The first of those is also the last open
 question at the end of this document, and the two should be revisited together.
+
+### Screenshots, and the fact that this repository is public
+
+"Screenshot" covers three different artefacts with three different audiences,
+and conflating them is how a picture of a logged-in account ends up somewhere
+permanent. Kept apart:
+
+| Artefact | Who needs it | Where it lives |
+| --- | --- | --- |
+| `screenshot/pre.png`, `screenshot/fail.png` — the real page as it actually was | The operator, deciding whether this is even a locator problem | **On the Pi only.** Never uploaded, never committed, never attached to a PR. Read over the existing SSH path from the laptop |
+| A render of the committed snapshot | The agent, writing the locator | **Inside the session**, generated on demand from the fixture with the preinstalled Chromium. Never committed — it is derived data, reproducible from the fixture at any time |
+| The outlined-match image | The reviewer, on a phone | **Posted to the PR by CI**, which re-renders it from the fixture. Cropped to the matched element plus a margin — never the full page |
+
+The load-bearing point is that the fix is written against the *snapshot*, not
+against the live page, so a render of the snapshot is the more relevant picture
+anyway. If the two ever disagree, that disagreement is itself the finding: the
+fix is being written against something other than what broke, and the capture is
+wrong.
+
+**`amc40/browser-interaction-mcp-poc` is a public repository.** That is not a
+detail — it means every committed fixture and every image CI attaches to a PR is
+world-readable, permanently, at a URL that needs no credentials. The design's
+"committed snapshot fixtures are redacted copies, reviewed like any other file"
+was written without that in view. The bar is therefore not *would I show this to
+a colleague* but *am I publishing this*, and three things follow:
+
+- **Commit the subtree, not the page.** The fixture only has to be a valid
+  replay target for one locator: the failing action's ancestor chain and its
+  subtree — which is already the boundary the design's text-node rule draws. A
+  results grid with a handful of tiles replays exactly as well as the whole
+  logged-in page, is far less to redact, and publishes far less.
+- **Crop what CI posts**, for the same reason and one other: an outline box on a
+  full-page render is nearly invisible on a phone. Cropping serves the review
+  and the exposure at once.
+- Prefer fixtures from unauthenticated pages wherever a locator appears on one —
+  the groceries homepage is public, and the search box appears there.
+
+**If that proves too restrictive** — if useful fixtures cannot be cut down far
+enough to publish — the fallback is to run the heal loop in a private repository
+and bring only the locator diff across. Heavier, and it costs the phone-friendly
+review; worth naming now so it is a decision rather than a discovery.
 
 ## Stages
 
@@ -166,8 +207,9 @@ anything depends on it.
   and gitleaks catches credentials, not personal data. Every fixture is a
   redactor output that a human has read, never a raw save.
 - Reviewer artefact: the job renders the fixture with the proposed locator's
-  match outlined and uploads it, so review answers "is this *Archive* or
-  *Delete*?" from a picture.
+  match outlined, crops to that element plus a margin, and posts it to the PR,
+  so review answers "is this *Archive* or *Delete*?" from a picture — legibly on
+  a phone, and without republishing the whole page.
 
 **Done when:** a wrong-but-plausible locator (points at the tile's price rather
 than its add button) fails the job, and the outline image shows why.
