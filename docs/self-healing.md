@@ -381,7 +381,7 @@ anything that only breaks on the Pi still only surfaces on the Pi.
   convenience is the direction this design is most likely to erode from.
 - **How to notice the mechanism failing quietly** — heals that merge, deploy, and
   break something the snapshot could not show. Some of [`deployment.md`
-  §8](deployment.md)'s per-call logging would be the raw material.
+  §9](deployment.md)'s per-call logging would be the raw material.
 - **Whether the healing agent should propose changes to the site instead.** Where
   the operator controls the page, "add a test id" is the better fix, and it is a
   PR to a different repository. Out of scope here, but it is the version of this
@@ -397,6 +397,8 @@ anything that only breaks on the Pi still only surfaces on the Pi.
 - [Playwright locators](https://playwright.dev/python/docs/locators) — role and
   test-id addressing, and strict-mode ambiguity
 - [`deployment.md`](deployment.md) — the mitigations this design assumes,
-  particularly §6 (shell access), §7 (the profile at rest) and §8 (logging)
+  particularly §6 (shell access), §7 (the profile at rest), §8 (isolating the
+  browser from the server, which is where captures and redaction belong) and
+  §9 (logging)
 - [SDR 0001](sdr/0001-github-authentication.md) — why the trust boundary is where
   it is

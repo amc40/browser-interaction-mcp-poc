@@ -172,6 +172,12 @@ rejects a deliberately out-of-surface commit on a test heal branch.
   always-scrubbed list, and the text-node subtree rule — all as written in the
   design, composed with `redaction.build_redactor(settings)` for the operator's
   own credentials.
+- **Where this runs matters.** [`deployment.md` §8](deployment.md) proposes
+  splitting the browser out of the server process; the raw trace is precisely
+  the artefact that argues for it. Capture and redaction belong on the browser's
+  side of that split, so the server only ever sees a redacted bundle. If the
+  split has not happened by the time this is built, note it as debt rather than
+  quietly putting the raw trace in the server's hands.
 - **The DOM snapshot must be self-contained.** The healing session runs with no
   network, so a snapshot that references external stylesheets renders as
   unstyled markup there — and an unstyled render is useless as review evidence
@@ -334,4 +340,4 @@ answer. Two now have sharper edges:
 - **How to notice the mechanism failing quietly** — a heal that merges, deploys
   and breaks something the snapshot could not show. With merge-to-deploy now
   automatic, this matters more than it did when the design was written, and
-  `deployment.md` §8's per-call logging is still the raw material.
+  `deployment.md` §9's per-call logging is still the raw material.
