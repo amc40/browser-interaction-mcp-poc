@@ -131,6 +131,14 @@ rejects a deliberately out-of-surface commit on a test heal branch.
   always-scrubbed list, and the text-node subtree rule — all as written in the
   design, composed with `redaction.build_redactor(settings)` for the operator's
   own credentials.
+- **The DOM snapshot must be self-contained.** The healing session runs with no
+  network, so a snapshot that references external stylesheets renders as
+  unstyled markup there — and an unstyled render is useless as review evidence
+  and misleading to reason about layout from. Inline the CSS at capture time, on
+  the Pi, where it is still reachable; drop images but keep their boxes
+  (`width`/`height` on the `img`), so the shape of the page survives without
+  shipping its pictures. This is a capture-time requirement precisely because
+  the Pi is the last place with a route to those resources.
 - The bundle is written to an owner-only directory on the Pi and **is not
   uploaded anywhere**. The operator fetches one over the existing SSH path when
   they want to look at it.
@@ -192,17 +200,33 @@ session has neither, and can be configured so it never can.
   snapshot replay itself, against `file://`, and iterate before pushing anything
   — the design's "agent with read-only tools over the snapshot" level, reached
   early and for free, with CI still re-running the same checks on the PR.
-- **How the bundle gets in**, given network `None` and no route to the Pi: the
-  operator fetches it from the Pi over the existing SSH path, reads the redacted
-  snapshot once, and commits it to a `claude/heal-*` branch as the fixture. The
-  session then only ever sees repository content. This costs one laptop hop per
-  heal and buys three things: no bundle store to design yet, no allowlist entry,
-  and the redaction review the design insists on happening — by a human, before
-  anything leaves the Pi — as a step nobody can skip. Every turn after that hop
-  is phone-workable.
+- **Nothing of substance travels in the prompt.** There is no good way to hand a
+  cloud session a DOM snapshot and a pair of PNGs at launch, and trying is the
+  wrong shape anyway — the evidence is large, binary, and needs to end up in the
+  PR regardless. So the repository is the transport: the operator fetches the
+  bundle from the Pi over SSH, reads the redacted snapshot, and **pushes** it to
+  a `claude/heal-*` branch (pushed, not just committed — the session starts from
+  the remote). The prompt is then one line: the branch, the fixture path, the
+  locator id and the failure class, all of which fit in a phone message.
+  Everything else the agent needs, it reads from the checkout.
+- **Screenshots stay out of git.** The DOM snapshot earns its place in the
+  repository because it becomes the permanent regression fixture. The failure
+  PNGs do not: they are review evidence, they are binary, and git history keeps
+  them for good — a poor place for pictures of a logged-in account. The session
+  has Chromium, so it *re-renders* what it needs from the committed snapshot
+  instead, which is why stage 1 requires that snapshot to be self-contained. The
+  original PNGs stay on the Pi for the operator to look at directly.
+- This costs one laptop hop per heal and buys four things: no bundle store to
+  design yet, no allowlist entry, no sensitive binaries in git history, and the
+  redaction review the design insists on — by a human, before anything leaves
+  the Pi — as a step nobody can skip. Every turn after that hop is
+  phone-workable.
 - **Review from a phone raises the stakes on the artefacts.** A selector diff on
-  a small screen is barely reviewable; the outlined-match screenshot is. Stage 2
-  is therefore a hard prerequisite for stage 3, not a nice-to-have alongside it.
+  a small screen is barely reviewable; the outlined-match screenshot is. CI —
+  which does have a network and already re-renders from the fixture — posts it
+  to the PR, so the picture arrives where the review happens rather than as a
+  file someone has to go and find. Stage 2 is therefore a hard prerequisite for
+  stage 3, not a nice-to-have alongside it.
 - Before merging: publish the branch to the Pi with `deploy/deploy-branch.sh`
   and run the failing tool once against the real site. This is the end-to-end
   check, in place of a deploy gate, and it is a habit worth forming here while
@@ -224,6 +248,15 @@ the baseline rule above — which the login and search-and-add paths already do.
   `None` — plus at most one allowlisted bundle host if the bundle cannot ride in
   the fire text, and branch `claude/heal-<fp>`. The only genuinely new pieces
   are the trigger and whatever replaces the operator's laptop hop.
+- **The repo-as-transport trick does not generalise for free.** For the Pi to
+  push the fixture branch itself, it needs a write credential — and the Pi's
+  deploy credential is read-only today, which is one of the absences I2 rests
+  on. A ref-scoped token limited to `claude/heal-*` on one repository is
+  defensible (branch protection still keeps it off `main`, and a human still
+  merges), but it is a genuine widening on the machine that holds the browser
+  profile. The alternative is the bundle store and its one allowlist entry.
+  Decide this when stage 4 is actually built, with a real bundle's size in hand;
+  both options are live, and the manual hop is what makes it safe to defer.
 - Caps: one open PR per fingerprint, superseding rather than stacking; a second
   failure on a fingerprint whose heal already merged stops healing and pages the
   operator; the tool is quarantined meanwhile so a retrying client gets a clear
