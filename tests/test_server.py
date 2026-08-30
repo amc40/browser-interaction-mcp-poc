@@ -90,9 +90,12 @@ async def test_sainsburys_search_wires_to_the_browser_action(
         return [
             sainsburys.ProductMatch(
                 name="Chocolate Digestives 400g",
+                id="1234567",
                 image_url="https://example.invalid/digestives.jpg",
             ),
-            sainsburys.ProductMatch(name="Semi Skimmed Milk 2L", image_url=None),
+            sainsburys.ProductMatch(
+                name="Semi Skimmed Milk 2L", id="7654321", image_url=None
+            ),
         ]
 
     monkeypatch.setattr(sainsburys, "search_products", fake_search_products)
@@ -100,9 +103,13 @@ async def test_sainsburys_search_wires_to_the_browser_action(
     async with Client(build_server(settings)) as client:
         result = await client.call_tool("sainsburys_search", {"query": "chocolate"})
 
-    assert [(r.name, r.image_url) for r in result.data.results] == [
-        ("Chocolate Digestives 400g", "https://example.invalid/digestives.jpg"),
-        ("Semi Skimmed Milk 2L", None),
+    assert [(r.name, r.id, r.image_url) for r in result.data.results] == [
+        (
+            "Chocolate Digestives 400g",
+            "1234567",
+            "https://example.invalid/digestives.jpg",
+        ),
+        ("Semi Skimmed Milk 2L", "7654321", None),
     ]
     assert seen_calls == [("chocolate", storage_state_path)]
 
@@ -153,10 +160,15 @@ async def test_sainsburys_add_to_basket_wires_to_the_browser_action(
     storage_state_path = tmp_path / "session.json"
     storage_state_path.write_text("{}", encoding="utf-8")
     settings = Settings(sainsburys_storage_state_path=storage_state_path)
-    seen_calls: list[tuple[str, Path]] = []
+    seen_calls: list[tuple[str, str | None, Path]] = []
 
-    def fake_add_to_basket(product_name: str, *, storage_state_path: Path) -> str:
-        seen_calls.append((product_name, storage_state_path))
+    def fake_add_to_basket(
+        product_name: str,
+        *,
+        storage_state_path: Path,
+        product_id: str | None = None,
+    ) -> str:
+        seen_calls.append((product_name, product_id, storage_state_path))
         return "Chocolate Digestives 400g"
 
     monkeypatch.setattr(sainsburys, "add_to_basket", fake_add_to_basket)
@@ -167,7 +179,39 @@ async def test_sainsburys_add_to_basket_wires_to_the_browser_action(
         )
 
     assert result.data.product == "Chocolate Digestives 400g"
-    assert seen_calls == [("Chocolate Digestives 400g", storage_state_path)]
+    assert seen_calls == [("Chocolate Digestives 400g", None, storage_state_path)]
+
+
+async def test_sainsburys_add_to_basket_passes_product_id_through(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticate: Authenticate,
+    tmp_path: Path,
+) -> None:
+    """An optional `product_id` reaches `sainsburys.add_to_basket` untouched."""
+    authenticate()
+    storage_state_path = tmp_path / "session.json"
+    storage_state_path.write_text("{}", encoding="utf-8")
+    settings = Settings(sainsburys_storage_state_path=storage_state_path)
+    seen_calls: list[tuple[str, str | None, Path]] = []
+
+    def fake_add_to_basket(
+        product_name: str,
+        *,
+        storage_state_path: Path,
+        product_id: str | None = None,
+    ) -> str:
+        seen_calls.append((product_name, product_id, storage_state_path))
+        return "Chocolate Digestives 400g"
+
+    monkeypatch.setattr(sainsburys, "add_to_basket", fake_add_to_basket)
+
+    async with Client(build_server(settings)) as client:
+        await client.call_tool(
+            "sainsburys_add_to_basket",
+            {"product_name": "Chocolate Digestives", "product_id": "1234567"},
+        )
+
+    assert seen_calls == [("Chocolate Digestives", "1234567", storage_state_path)]
 
 
 async def test_sainsburys_add_to_basket_refuses_without_a_saved_session(

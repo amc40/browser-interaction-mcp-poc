@@ -46,6 +46,11 @@ class FakeLocator:
     add_button: FakeLocator | None = None
     image_src: str | None = "https://example.invalid/product.jpg"
     has_image: bool = True
+    # This tile's own id, as it would appear in `data-testid="product-tile-<id>"`.
+    # Defaulted rather than `None`, since a real product tile always has one -
+    # `_product_match` treats a tile it can't read an id from as unreadable,
+    # same as one with no name heading. Set to `None` only to simulate that.
+    tile_id: str | None = "9999999"
 
     @property
     def first(self) -> FakeLocator:
@@ -107,9 +112,18 @@ class FakeLocator:
         return self if self.has_image else FakeLocator(count_=0)
 
     def get_attribute(self, name: str) -> str | None:
-        """Return this (image) locator's pre-wired `src`."""
-        assert name == "src", f"unexpected attribute {name!r}"
-        return self.image_src
+        """Return this (image or tile) locator's pre-wired attribute.
+
+        `src` and `data-testid` are read off the same object in practice - a
+        tile *is* its own "img" locator here (see `locator`) - so both are
+        handled here rather than needing separate fakes.
+        """
+        if name == "src":
+            return self.image_src
+        if name == "data-testid":
+            return None if self.tile_id is None else f"product-tile-{self.tile_id}"
+        msg = f"unexpected attribute {name!r}"
+        raise AssertionError(msg)
 
 
 @dataclass
@@ -391,7 +405,7 @@ def test_skips_a_heading_with_no_text(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # search_products
 # ---------------------------------------------------------------------------
-def test_search_products_returns_names_and_image_urls_in_order(
+def test_search_products_returns_names_ids_and_image_urls_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     page = FakePage(
@@ -399,10 +413,12 @@ def test_search_products_returns_names_and_image_urls_in_order(
             FakeLocator(
                 heading=FakeLocator(text=" Fairy Lemon Washing Up Liquid "),
                 image_src="https://example.invalid/fairy.jpg",
+                tile_id="1111111",
             ),
             FakeLocator(
                 heading=FakeLocator(text="Ecover Washing Up Liquid"),
                 image_src="https://example.invalid/ecover.jpg",
+                tile_id="2222222",
             ),
         ]
     )
@@ -415,15 +431,37 @@ def test_search_products_returns_names_and_image_urls_in_order(
     assert results == [
         sainsburys.ProductMatch(
             name="Fairy Lemon Washing Up Liquid",
+            id="1111111",
             image_url="https://example.invalid/fairy.jpg",
         ),
         sainsburys.ProductMatch(
             name="Ecover Washing Up Liquid",
+            id="2222222",
             image_url="https://example.invalid/ecover.jpg",
         ),
     ]
     assert page.search_box.filled == "washing up liquid"
     assert page.search_box.pressed_keys == ["Enter"]
+
+
+def test_search_products_raises_when_a_readable_tile_has_no_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A name-bearing tile with no readable id signals changed markup.
+
+    Unlike a tile with no name heading at all (routinely a sponsored slot,
+    silently skipped), one that does read a name but can't produce an id is
+    treated as a hard failure - `id` is never optional on a returned match.
+    """
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="No Id Product"), tile_id=None),
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match=r"No Id Product.*no id"):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
 
 
 def test_search_products_honours_a_smaller_count(
@@ -468,7 +506,9 @@ def test_search_products_reports_no_image_when_the_tile_has_none(
 
     results = sainsburys.search_products(storage_state_path=Path("session.json"))
 
-    assert results == [sainsburys.ProductMatch(name="No Photo Product", image_url=None)]
+    assert results == [
+        sainsburys.ProductMatch(name="No Photo Product", id="9999999", image_url=None)
+    ]
 
 
 def test_search_products_raises_when_redirected_to_login(
@@ -668,6 +708,110 @@ def test_add_to_basket_raises_when_no_result_matches_exactly(
     with pytest.raises(RuntimeError, match="No search result exactly matches"):
         sainsburys.add_to_basket(
             "Fairy Lemon Washing Up Liquid", storage_state_path=Path("session.json")
+        )
+
+
+@pytest.mark.parametrize("ellipsis", ["...", "…"])
+def test_add_to_basket_matches_a_name_truncated_with_a_trailing_ellipsis(
+    monkeypatch: pytest.MonkeyPatch, ellipsis: str
+) -> None:
+    """A name cut short by some other surface before being passed back in.
+
+    Not anything this codebase does to a name itself - see `add_to_basket`'s
+    docstring.
+    """
+    add_button = FakeLocator(count_=1)
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(
+                    text="Sainsbury's Sundream Plum Vine Tomatoes, Taste the Difference"
+                ),
+                add_button=add_button,
+            )
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    result = sainsburys.add_to_basket(
+        f"Sainsbury's Sundream Plum Vine Tomatoes, Taste the Differenc{ellipsis}",
+        storage_state_path=Path("session.json"),
+    )
+
+    assert result == "Sainsbury's Sundream Plum Vine Tomatoes, Taste the Difference"
+    assert add_button.clicked
+    # The literal ellipsis is stripped before it ever reaches the site's own
+    # search box - searching on it wouldn't find this result either.
+    assert page.search_box.filled == (
+        "Sainsbury's Sundream Plum Vine Tomatoes, Taste the Differenc"
+    )
+
+
+def test_add_to_basket_still_raises_when_an_ellipsis_prefix_matches_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(heading=FakeLocator(text="Ecover Washing Up Liquid"))
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="No search result exactly matches"):
+        sainsburys.add_to_basket(
+            "Fairy Lemon Washing Up...", storage_state_path=Path("session.json")
+        )
+
+
+def test_add_to_basket_matches_by_product_id_over_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`product_id`, when given, is matched instead of `product_name`.
+
+    Wires a tile whose *name* doesn't match the (deliberately wrong)
+    `product_name` at all, so the only way this can pass is if the id match
+    took priority.
+    """
+    wanted_add_button = FakeLocator(count_=1)
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(text="Fairy Lemon Washing Up Liquid"),
+                add_button=wanted_add_button,
+                tile_id="1234567",
+            )
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    result = sainsburys.add_to_basket(
+        "washing up liquid",
+        product_id="1234567",
+        storage_state_path=Path("session.json"),
+    )
+
+    assert result == "Fairy Lemon Washing Up Liquid"
+    assert wanted_add_button.clicked
+
+
+def test_add_to_basket_raises_when_no_result_has_the_given_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        product_tiles=[
+            FakeLocator(
+                heading=FakeLocator(text="Ecover Washing Up Liquid"),
+                tile_id="7654321",
+            )
+        ]
+    )
+    _wire(monkeypatch, page)
+
+    with pytest.raises(RuntimeError, match="No search result has id"):
+        sainsburys.add_to_basket(
+            "washing up liquid",
+            product_id="1234567",
+            storage_state_path=Path("session.json"),
         )
 
 
