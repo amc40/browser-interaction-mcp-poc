@@ -54,60 +54,127 @@ exist** and then **parameterising over a list**.
 
 ## The shape
 
-Three repositories and one inventory.
+One repository, a `uv` workspace, and one inventory file inside it.
 
 ```
-browser-mcp-core         library: server, auth, browser, login framework,
-  (this repo, minus         failure capture, deploy webhook, the CI workflow
-   Sainsbury's)             every site repo calls
-
-<slug>-mcp               one per site, generated from a template:
-  sainsburys-mcp            locators.py, site.py, tools.py, pyproject.toml
-  ocado-mcp                 pinning core by tag, a 12-line ci.yml
-  …
-
-browser-mcp-fleet        Ansible. Provisions the host once, then loops over
-                            apps.yml to create per-app users, dirs, units,
-                            env files, webhooks and tunnel ingress rules
+browser-mcp/                 one repo, private from the first committed fixture
+  pyproject.toml               [tool.uv.workspace] members = ["packages/*"]
+  uv.lock                      one lockfile: one pip-audit, one dependency story
+  packages/
+    core/                      server, auth, browser, login framework,
+                                 redaction, failure capture, deploy webhook
+    sainsburys/                locators.py, site.py, tools.py
+    ocado/                     …one directory per site
+  fleet/                       Ansible, and apps.yml
 ```
 
-`apps.yml` is the single source of truth:
+`fleet/apps.yml` is the single source of truth for the deployment:
 
 ```yaml
 apps:
   sainsburys:
-    repo: https://github.com/amc40/sainsburys-mcp.git
-    version: main
+    package: sainsburys       # packages/<name>, not a repo URL
     hostname: sainsburys.mcp.example.com
     port: 8001
     webhook_port: 8801
-    headed: true          # this site blocks headless Chromium
+    headed: true              # this site blocks headless Chromium
     memory_high: 900M
 ```
 
-Adding a site is: generate the repo, add six lines here, run the playbook.
+Adding a site is one pull request: a new directory under `packages/`, six lines
+in `apps.yml`, then a playbook run. The code and the deployment that runs it
+arrive together, atomically, which they cannot do when they live in different
+repositories.
 
-### D1 — Repo per site, not a monorepo
+**One playbook run covers the whole fleet.** The host-level roles (`base`,
+`storage`, `uv`, `browser`, `tunnel`) run once for the machine; the per-app roles
+loop over `apps.yml`. There is no per-app playbook and no per-app invocation —
+`ansible-playbook site.yml` provisions every app that file names, and adding one
+is a diff to that file rather than a new deployment to stand up. Anything Ansible
+can generate rather than be told, it should: the deploy webhook's HMAC secret is
+a random string with no meaning outside the host, so it is generated and written
+straight to the two places that need it, never typed into the vault.
+
+### D1 — A monorepo workspace, not a repo per site
+
+**This decision was made the other way first, and reversed.** The reasoning that
+reversed it is worth keeping, because it is the same reasoning as D2's.
 
 | Option | Verdict |
 | --- | --- |
-| **Repo per site + a shared library** | **Chosen.** Matches R1 and R2 directly. A per-app deploy credential is scoped to one repo; a heal PR touches one site; a bad commit ships one app |
-| Monorepo, one package per site | Rejected. Every app's checkout would contain every app's code, so the per-app deploy account either sees everything (undoing R2 at the deploy layer) or needs sparse checkouts and per-path CI to fake the separation. It also makes the self-healing diff-surface check and the per-repo heal token much harder to scope |
+| **One `uv` workspace: core + every site + the fleet** | **Chosen.** One gate configuration, one lockfile, and — the deciding factor — promoting a helper from a site into core is a move plus an import change in a single commit |
+| Repo per site + core as a pinned library | Rejected, but live. It buys one thing nothing else can: credentials scoped to one site's code. See the cost below |
 | One process, sites as plugins | Rejected outright. It fails R2 at the first line: one process means one `storage_state` directory, one memory space, one compromise |
 
-The cost is real and worth naming: **N repos means N sets of CI, N Dependabot
-streams, N template drifts.** That cost is what D2's reusable workflow and the
-`copier` template exist to pay down; if it is not paid down, this decision is the
-wrong one. See "What would change my mind".
+**R2 is unaffected either way, and that is the thing most easily got wrong.**
+Isolation lives in the accounts, units and file modes on the host, not in where
+the source is kept. Every app still gets `bmcp-<slug>`, `bmcpd-<slug>`, its own
+checkout, its own venv (`uv sync --frozen --package <slug>`, which uv supports
+natively) and its own `0700` state directory. Nothing in D3 changes.
 
-**Make new site repos private by default.** `browser-interaction-mcp-poc` is
-public, and the self-healing plan spends its longest section on what that costs —
-every committed fixture is a permanent world-readable copy of a page from a
-logged-in account. A private site repo removes that constraint entirely: the bar
-drops from *am I publishing this* back to *would I show a colleague*, fixtures
-can be pages rather than hand-cut subtrees, and the plan's "private-repository
-fallback" becomes the default rather than the retreat. The core library stays
-public — it holds no site content at all.
+**Why the reversal.** D2 says *extract on the second occurrence, not the first* —
+which is a bet that you do not yet know where the seam goes, and that site two is
+what will tell you. A version boundary between core and the sites is a commitment
+to already knowing: with pinned releases, promoting a helper means add to core →
+tag → release → bump site A → bump site B → delete both copies. That friction
+falls hardest on exactly the refactoring R4 depends on, so the split world makes
+this plan's own maintenance strategy expensive to carry out. Splitting before
+site two exists locks in a guess behind a boundary designed to make guesses
+costly to revise.
+
+Three smaller things follow the same way:
+
+- **One gate configuration.** The reusable workflow shares the CI *runner*, but
+  Python has no clean way to share the *config*: `[tool.ruff]` with
+  `select = ["ALL"]`, mypy strict plus six extra error codes, 100% line and
+  branch coverage, `filterwarnings = ["error"]` — each repo would carry its own
+  copy of that block, and they drift. Here it is written once.
+- **One lockfile.** One `pip-audit`, one Dependabot stream, and no way for site A
+  to sit on a vulnerable Playwright while site B is patched.
+- **Reading across sites.** With five sites you genuinely want to compare how
+  Ocado's consent banner was handled against Sainsbury's. One checkout, one grep
+  — and that is how site N gets written, by reading sites 1 to N−1.
+
+**What it costs, stated plainly.** GitHub has ref-scoped tokens, not path-scoped
+ones. The self-healing plan calls the Pi's `claude/heal-*` write credential "a
+genuine widening" on the machine that holds the browser profiles; in a monorepo
+that widening covers every site's code rather than one. Branch protection still
+keeps it off `main` and a human still merges, so the containment is unchanged —
+but the reach is wider, and that is the price of this decision. It is the one
+property repo-per-site has that nothing here replaces.
+
+**Two new pieces of work the monorepo introduces**, neither large, both real:
+
+- **The deploy path needs to know which apps a commit affects.** A commit under
+  `packages/<slug>/` restarts that app; one under `packages/core/` restarts all
+  of them. That is a path check in the CI job that signs the webhook, not new
+  infrastructure — but it did not exist before.
+- **Path-filtered CI needs a gate job.** A required check that gets skipped by a
+  path filter never reports, and blocks the merge rather than passing it. The
+  standard shape is one always-running job that depends on the filtered ones.
+
+**Optional, and cheap: sparse per-app checkouts.** `git sparse-checkout set
+packages/core packages/<slug>` gives each deploy account only the code it runs,
+recovering most of what repo-per-site offered here. Verified to work with the
+workspace: `uv sync --frozen --package <slug>` resolves happily with sibling
+members absent from disk, because `--frozen` reads the committed lock rather
+than re-resolving. Only `uv lock` needs the whole tree, and the host never locks
+— `deploy.sh` has always run `--frozen`. Worth doing, though reading another
+app's *source* is not a meaningful exposure: the secrets are in the per-app
+environment file and `storage_state`, and those were never in the repository.
+
+**The repository goes private before the first committed fixture.** The
+self-healing plan spends its longest section on what a public repository costs —
+every committed fixture is a permanent, world-readable copy of a page from a
+logged-in account. That constraint does not bind until a fixture exists, which
+is self-healing stage 2, so there is a precise trigger rather than a vague
+intention: **public is fine until the first fixture lands, and not after.** From
+then the bar drops back from *am I publishing this* to *would I show a
+colleague*, and the plan's "private-repository fallback" is simply the default.
+
+If publishing `core` as a library ever becomes a goal in its own right, it is a
+`git filter-repo` away — and that is the moment to pay for the version boundary,
+with the seam already known, rather than now.
 
 ### D2 — What goes in the library, and what deliberately does not yet
 
@@ -125,8 +192,9 @@ Extract now, because it contains no site-specific content and never will:
 - `deploy_webhook.py` — verbatim
 - **Failure capture** (`failure_capture.py`, `dom_redaction.py`) — self-healing
   stage 1, written once here rather than five times
-- The **reusable GitHub Actions workflow** (`workflow_call`), so a site repo's
-  `ci.yml` is a dozen lines and a gate change is one edit in one place
+- Nothing needs a *reusable* CI workflow any more: there is one workflow and one
+  `[tool.*]` block for the whole workspace, which is the same benefit without the
+  indirection
 
 Do **not** extract yet, even though it is tempting:
 
@@ -216,13 +284,37 @@ is why authentication is on every request and not on the network position; the
 ports are defence in depth, not the gate. Unix sockets would remove even that,
 but FastMCP does not expose a UDS bind today — worth revisiting if it does.
 
-**One GitHub OAuth app per site.** A shared client secret means a leak from app A
-compromises the front door of every other app, which is precisely what R2
-forbids. The cost is one OAuth app registration per site — a two-minute manual
-step, recorded in the template's checklist alongside the DNS record that wildcard
-DNS just removed. Cloudflare Access in front of the whole `*.mcp` zone is worth
-adding as an independent second gate; it does not replace this one, because the
-claude.ai connector runs the OAuth flow itself.
+**One GitHub OAuth app for the whole fleet, not one per site.** This was written
+the other way first, on the assumption that an OAuth App takes a single callback
+URL. It no longer does: as of
+[14 August 2026](https://github.blog/changelog/2026-08-14-multiple-redirect-uris-and-token-refresh-for-oauth-apps/)
+an OAuth App may register **up to ten redirect URIs**, and each one can
+optionally enable **wildcard matching** across subdomains and subpaths.
+
+Each app needs two callbacks — the MCP endpoint's `/auth/callback` and the login
+page's — so ten URIs covers five apps with explicit, auditable URLs. That is the
+recommended setting: **adding a site becomes editing one app's URI list rather
+than registering a new app**, and the wildcard's "any subdomain or subpath of
+this" property stays switched off, which matters here because a wildcard redirect
+sitting behind a wildcard DNS record is a wider grant than it looks. Past five
+apps, turn wildcard matching on for `https://*.mcp.example.com/` and the step
+disappears entirely.
+
+Note the changelog's own warning while doing it: **an app with only one redirect
+URI has wildcard matching on by default** — legacy behaviour, now visible and
+controllable. The existing single-callback app almost certainly has it enabled;
+worth turning off.
+
+What this costs is one client secret shared across every app, which the earlier
+draft refused. Worth being precise about what that secret actually protects: it
+authenticates the *server* to GitHub during the code exchange, and this server
+additionally checks the token's `sub` against one numeric user ID and requests no
+scopes. An attacker holding the secret still cannot mint a token this server
+accepts without the operator completing a GitHub flow for them. It is a
+phishing-grade exposure, not a direct-access one — a fair trade for deleting a
+manual step from every future site. Cloudflare Access in front of the whole
+`*.mcp` zone remains worth adding as an independent second gate; it does not
+replace this one, because the claude.ai connector runs the OAuth flow itself.
 
 ### D5 — Deploy: one webhook instance per app
 
@@ -310,7 +402,7 @@ The pipeline:
 playwright codegen --save-storage=state.json https://site
         │  operator records login, then records the action
         ▼
-bmcp new-site <slug>            copier template → private repo, CI, skeleton
+bmcp new-site <slug>            scaffolds packages/<slug>/ in the workspace
         ▼
 bmcp import-recording rec.py    parse the script → emit:
         │                         • locators.py   (a row per element touched)
@@ -353,18 +445,20 @@ not are listed here, so the plan is not silently invalidated by the split.
 
 **What the split makes easier:**
 
-- **Private site repos remove the plan's hardest constraint.** Its longest section
-  is about publishing fixtures from a logged-in account to a world-readable repo,
-  and it names "run the heal loop in a private repository" as the fallback if
-  fixtures cannot be cut down far enough. Per-site repos make that the default.
-  Subtree-only fixtures and cropped CI images remain good practice — less to redact
-  is less to get wrong — but they stop being the thing the whole design hangs on.
-- **The stage 4 write credential gets properly scoped.** The plan flags a genuine
-  widening: for the Pi to push a fixture branch itself it needs a write token, and
-  its deploy credential is read-only today. Per app, that token is scoped to one
-  repository and `claude/heal-*` on it — so a token leak from the machine holding
-  app A's browser profile reaches app A's repo and nothing else. The plan's
-  "defensible, but a genuine widening" becomes considerably more defensible.
+- **Going private removes the plan's hardest constraint.** Its longest section is
+  about publishing fixtures from a logged-in account to a world-readable repo, and
+  it names "run the heal loop in a private repository" as the fallback if fixtures
+  cannot be cut down far enough. D1's trigger — private before the first committed
+  fixture — makes that the default. Subtree-only fixtures and cropped CI images
+  remain good practice, because less to redact is less to get wrong, but they stop
+  being the thing the whole design hangs on.
+- **The stage 4 write credential does *not* get better, and this is the cost of
+  D1.** The plan flags a genuine widening: for the host to push a fixture branch
+  itself it needs a write token, and its deploy credential is read-only today. In
+  a monorepo that token reaches every site's code, not one. Ref-scoping to
+  `claude/heal-*` and branch protection still keep it off `main`, and a human
+  still merges — the containment holds, the reach is wider. Accepted knowingly;
+  see D1.
 - **Per-app quarantine is already per-app.** The plan's cap — one open PR per
   fingerprint, quarantine the tool on a repeat failure — now quarantines one app's
   tool without touching the rest of the fleet.
@@ -373,7 +467,7 @@ not are listed here, so the plan is not silently invalidated by the split.
 
 | Plan says | With a fleet |
 | --- | --- |
-| Stage 0's `locators.py` and the `claude/heal-*` diff-surface CI check live in this repo | Both live in **every** site repo. The check ships in the core library's reusable workflow, so it is one implementation, not N |
+| Stage 0's `locators.py` and the `claude/heal-*` diff-surface CI check live in this repo | One `locators.py` per site package. The check becomes path-aware — a heal branch may touch `packages/<slug>/locators.py` and that site's fixtures, nothing else — and there is still only one implementation of it |
 | Fingerprint = tool + locator id + failure class | Prefix it with the **app slug**. Two sites will have a `login.username` |
 | One healing cloud environment, network `Custom`, package registries only | Still one environment — but the allowlist must exclude **every** target site, and it is now a list that grows silently as apps are added. Make "the new site's domain is not on the healing allowlist" a line on the new-site checklist |
 | "Empty connectors" on the healing environment | **More load-bearing, not less.** The plan already notes this account has the POC's own MCP server connected, and that a healing session holding it can drive the real site with the network level still reading `None`. Every new app is another connector on the same account, so this rule now guards N routes instead of one |
@@ -384,9 +478,9 @@ not are listed here, so the plan is not silently invalidated by the split.
 Nothing above changes the three invariants (**I1** the healing agent never runs
 against the real site, **I2** it never changes what the server executes, **I3**
 failure evidence is as sensitive as the browser profile). The isolation work
-strengthens all three: I2's "the Pi's credential is read-only" becomes per-app,
-and I3's evidence now sits behind a `0700` directory owned by an account that is
-not shared with any other app.
+leaves I1 and I2 exactly as they were, and strengthens I3: the evidence now sits
+behind a `0700` directory owned by an account shared with no other app. The one
+thing that moves the wrong way is the reach of the stage 4 write token, above.
 
 ---
 
@@ -395,50 +489,46 @@ not shared with any other app.
 Each is independently useful, independently reviewable, and leaves a working
 deployment behind. Stage 0 of the self-healing plan is folded into stage 2 here,
 because the locator table is a prerequisite for both plans and should be built
-once.
+once. There were six stages before D1 was reversed; dropping the repository split
+removed one of them outright.
 
-### Stage 1 — Extract the core, in place, no deployment change
+### Stage 1 — Restructure into a workspace, no deployment change
 
-Split `src/` into `browser_mcp_core/` and `sainsburys_mcp/` **inside this
-repository**. Same tests, same gates, same systemd unit, same Pi. Nothing about
-the deployment learns anything happened.
+Move `src/browser_interaction_mcp/` into `packages/core/` and
+`packages/sainsburys/`, with a workspace root `pyproject.toml` and one
+`uv.lock`. Same tests, same gates, same systemd unit, same Pi. Nothing about the
+deployment learns anything happened.
 
 This proves the seam is where I think it is before anything depends on it, and it
-is cheap to undo. `settings.py` becomes `CoreSettings` with a subclass; `server.py`
-takes the site as a parameter; the login flow takes a `LoginSteps` implementation.
-The page-interaction helpers stay in `sainsburys_mcp/` per D2.
+is cheap to undo. `settings.py` becomes `CoreSettings` with a subclass;
+`server.py` takes the site as a parameter; the login flow takes a `LoginSteps`
+implementation. The page-interaction helpers stay in `packages/sainsburys/` per
+D2. The unit's `ExecStart` moves to the venv that `uv sync --package sainsburys`
+builds.
 
-**Done when:** `make check` passes with 100% coverage and no behaviour change, and
-`sainsburys_mcp` imports nothing from `browser_mcp_core` that mentions a grocer.
+**Done when:** `make check` passes with 100% coverage and no behaviour change,
+and `packages/sainsburys/` imports nothing from `packages/core/` that mentions a
+grocer.
 
 ### Stage 2 — The locator table
 
 Self-healing stage 0, done here because the codegen importer targets it too. A
 `locators.py` table keyed by locator id, a `resolve()` function, no inline
-locators anywhere in `site.py`, and the `claude/heal-*` diff-surface check in CI.
+locators anywhere in `site.py`, and the `claude/heal-*` diff-surface check in CI
+— path-aware, so it names `packages/<slug>/locators.py` rather than a bare path.
 Timeouts, consent-cookie shapes, business-logic filters and URLs stay out of the
 table, for the reasons the self-healing plan gives.
 
 **Done when:** `make check` passes with no behaviour change, and a deliberately
 out-of-surface commit on a test heal branch is rejected.
 
-### Stage 3 — Split the repos
+### Stage 3 — The fleet layer, and cut Sainsbury's over
 
-`browser-mcp-core` becomes its own public repository, tagged. `sainsburys-mcp`
-becomes its own private repository depending on a core tag. The reusable CI
-workflow moves to core; `sainsburys-mcp`'s `ci.yml` becomes a `workflow_call`
-stub. Renovate or Dependabot watches the core pin.
-
-The Pi keeps running the old unit throughout. Nothing is deployed differently yet.
-
-**Done when:** `sainsburys-mcp` is green on its own CI, built from a pinned core,
-and a core patch release produces an automatic bump PR on it.
-
-### Stage 4 — The fleet repo, and cut Sainsbury's over
-
-`browser-mcp-fleet` with `apps.yml` and the roles from `deploy/` made plural:
-per-app users, template units, per-app env files, per-app webhook instances,
+`deploy/` becomes `fleet/`, with `apps.yml` and the roles made plural: per-app
+users, systemd template units, per-app env files, per-app webhook instances,
 generated tunnel ingress, the shared slice with memory limits, wildcard DNS.
+The deploy path learns which package a commit touched, and the CI gate job that
+path filtering requires goes in at the same time.
 
 Then migrate the one existing app: new accounts, move
 `/var/lib/browser-interaction-mcp` → `/var/lib/browser-mcp/sainsburys` with
@@ -446,38 +536,41 @@ Then migrate the one existing app: new accounts, move
 connector still works and the session still authenticates, retire the old unit.
 
 The migration is the risky step in this whole plan, because a moved
-`storage_state` that loses its permissions or its contents means a real
-re-login on a site with MFA. Rehearse it with `--check --diff`; keep the old unit
+`storage_state` that loses its permissions or its contents means a real re-login
+on a site with MFA. Rehearse it with `--check --diff`; keep the old unit
 installed-but-stopped until the new one has served a real tool call.
 
 **Done when:** claude.ai calls `sainsburys_search` against the new unit, and
 `ps -o user=` shows `bmcp-sainsburys`.
 
-### Stage 5 — `bmcp new-site`, proven by a second site
+### Stage 4 — `bmcp new-site`, proven by a second site
 
-The copier template, the `new-site` command, and the codegen importer. Then —
-and this is the actual acceptance test — **automate a second, genuinely different
-site end to end using only that pipeline.** Not a hypothetical second site; a real
-one, chosen because you want it.
+The scaffold command and the codegen importer — a generator that writes a new
+directory under `packages/`, not a repository template, which is most of why
+this is smaller than it was. Then — and this is the actual acceptance test —
+**automate a second, genuinely different site end to end using only that
+pipeline.** Not a hypothetical second site; a real one, chosen because you want
+it.
 
 Site two is what tells you whether the library is right. Expect it to be wrong in
 at least two places, and treat fixing those as part of this stage rather than as
-a regression. In particular, expect the login framework's `LoginSteps` shape to be
-Sainsbury's-shaped, and expect at least one of the "deliberately not extracted"
-helpers to earn promotion.
+a regression. In particular, expect the login framework's `LoginSteps` shape to
+be Sainsbury's-shaped, and expect at least one of the "deliberately not
+extracted" helpers to earn promotion — which is now a move and an import change
+rather than a release cycle, and is the whole reason D1 went the way it did.
 
 **Done when:** site two is live on the Pi, under its own accounts, and the
-*ceremony* — repo, accounts, units, routes — took minutes rather than a day.
-Not the whole job: see "What it actually costs to add a site" below for why
-that is a narrower claim than it sounds.
+*ceremony* — package, accounts, units, routes — took minutes rather than a day.
+Not the whole job: see "What it actually costs to add a site" below for why that
+is a narrower claim than it sounds.
 
-### Stage 6 — The fleet's ongoing life
+### Stage 5 — The fleet's ongoing life
 
 Self-healing stages 1–4 from the existing plan, now built once in core and
 inherited by every site. The nightly smoke timers. Backups of every app's
 `storage_state` (they are the expensive thing to recreate — MFA, by hand, per
-site). A one-page fleet status view: per app, last successful smoke run, current
-core version, open heal PRs.
+site). A one-page fleet status view: per app, last successful smoke run, the
+commit it is running, and any open heal PRs.
 
 ---
 
@@ -493,18 +586,47 @@ first one and does nothing at all to the second, which is the critical path.
 
 | | Friction | Why it bites |
 | --- | --- | --- |
-| **Removed** | Repo, CI config, gates, package skeleton | `bmcp new-site` from the template; CI becomes a `workflow_call` stub |
+| **Removed** | Repo, CI config, gates, package skeleton | `bmcp new-site` writes a directory under `packages/`. There is no repository to create, no CI to configure and no gate config to copy — the workspace already has one of each |
 | **Removed** | Accounts, units, env files, webhook, tunnel ingress | Six lines in `apps.yml` and one playbook run |
 | **Removed** | The DNS record | A wildcard `*.mcp` record means there is no per-site DNS step at all |
-| **One-off** | A GitHub OAuth app per site | Registered by hand, and it needs **two** callback URLs, not one — the MCP endpoint's and the login page's, as `env.j2` already notes. A mismatch fails opaquely at first connect |
-| **One-off** | Vault entries, then the connector in claude.ai | Client id and secret, webhook secret, the site username — one `ansible-vault` edit. Then adding the connector once |
+| **One-off** | Two callback URLs added to the fleet's OAuth app | Editing one app's URI list, not registering a new app — see D4. A mismatch still fails opaquely at first connect |
+| **One-off** | The connector in claude.ai | A UI action, once per site, and the one step with no automatable path at all. The vault barely features any more: the client id and secret are fleet-wide, the webhook secret is generated by Ansible rather than typed, so all that is left per site is the account username — and only for sites that log in |
 | **Irreducible** | Does the site block headless Chromium? | Sainsbury's and Tesco both run Akamai Bot Manager, which blocks *headless* specifically, regardless of network origin or user agent. You find out by trying. It decides `headed: true`, which decides ~400MB, which decides whether the Pi has room for app N+1 at all |
-| **Irreducible** | The consent banner's real shape | Which CMP, which cookies, which registrable domain. Pre-seeding beats clicking: the button text changed from "Required only" to "Continue without accepting" within weeks, and the backdrop silently intercepts clicks, so Playwright reports a timeout on something unrelated rather than "a banner is in the way" |
+| **Reduced** | The consent banner's real shape | The market is concentrated — OneTrust, Cookiebot, Didomi, Sourcepoint, Usercentrics, TrustArc — and many implement IAB TCF, which exposes a standard `window.__tcfapi`. So core carries a **CMP registry**: per CMP, a detection fingerprint, the cookies to pre-seed for reject-all, and the fallback selectors. A `bmcp probe <url>` command opens the page and reports which one a site uses, turning research into confirmation. What stays per-site is the *values* — OneTrust's `OptanonConsent` encodes group ids configured per site, and the registrable domain differs — read once from the site's own cookie-declaration table |
 | **Irreducible** | What the login actually does | Not knowable from the outside. The Sainsbury's recording corrected four assumptions the login flow had *already made* from reading the public site: the login path, the consent copy, MFA living on a separate domain and not always appearing, and adding straight from the result tile |
 | **Irreducible** | Whether MFA always appears | On Sainsbury's it doesn't. That single fact is why the login runs in a parked subprocess with a 300-second OTP wait rather than inside a request handler — a site with unconditional MFA would have been a much smaller design |
 | **Irreducible** | Designing the tool surface | The real work, and it is design rather than transcription. `add_to_basket` went blind-first-result → exact name → name-or-id → ellipsis-prefix fallback, and needed `sainsburys_search` to exist at all, because an index into a result list goes stale between two calls |
-| **Reduced** | Codegen output is the wrong shape | It emits `wait_until="load"`, unreliable when a background poller keeps the network busy, and unbounded list reads on grids whose non-product tiles block for Playwright's full 30-second default and take the whole call down — the two patterns [`site-automation-gotchas.md`](site-automation-gotchas.md) names first. The importer and the template's helpers carry the fixes; every one still gets reviewed |
+| **Reduced** | Codegen output is the wrong shape | It emits `wait_until="load"`, unreliable when a background poller keeps the network busy, and unbounded list reads on grids whose non-product tiles block for Playwright's full 30-second default and take the whole call down — the two patterns [`site-automation-gotchas.md`](site-automation-gotchas.md) names first. Split in two: an AST script does the mechanical extraction, and a **skill** carries the judgment. See below |
 | **Irreducible** | One real run against the live site | `deploy-branch.sh`, SSH, run it. Nothing counts before this, and it is also the gate that promotes the site's locators into the healable set |
+
+### Shaping the recording: a script and a skill, not one importer
+
+The importer was described above as a single tool. It should be two, split on
+whether the work has a right answer:
+
+- **An AST script does the mechanical half.** Codegen output is just Playwright
+  calls, so extracting every addressed element into a `locators.py` row,
+  hoisting the recording's literals into named constants and emitting the
+  `site.py` / `tools.py` skeletons is a deterministic transform. A script does
+  that better and more repeatably than a model.
+- **A skill carries the judgment half** — which literal becomes a tool
+  parameter, applying every pattern in
+  [`site-automation-gotchas.md`](site-automation-gotchas.md), splitting the
+  login prefix from the action, writing docstrings that actually teach a model
+  how to call the tool, and the `Page`-faking tests that the coverage gate
+  demands.
+
+The useful observation is that **`site-automation-gotchas.md` is already written
+as skill content** — concrete failure patterns, each with the fix — and simply
+is not wired up as one. Making it `.claude/skills/site-automation/SKILL.md` turns
+knowledge that has to be remembered into knowledge that gets applied, and it is
+close to zero new writing.
+
+**The self-healing agent loads the same skill.** That follows directly from R3
+and R5 being the same problem: if authoring and healing both write locators
+against the same table, they should be working from the same rules about what a
+good locator on these sites looks like. One place to correct when a new pattern
+is learned, and the correction reaches both arms at once.
 
 ### The cost nobody budgets for: sessions expire
 
@@ -537,17 +659,20 @@ than a file copy.
 
 ## What would change my mind
 
-- **If the realistic count is two or three sites, not five-plus**, the repo-per-site
-  overhead may not repay itself, and a monorepo with per-app deploy accounts on
-  sparse checkouts becomes competitive. The isolation requirement (R2) is about the
-  *runtime*, and that is satisfied either way.
+- **If the fleet grows past roughly eight sites**, or a site arrives whose code
+  genuinely must not sit beside the others, split that site out. The crossover is
+  where one CI run and one head stop being able to hold the whole thing — and
+  splitting one package out later is mechanical, which is exactly why starting
+  here was safe.
 - **If egress control becomes a requirement** — an app that must provably only be
   able to reach one domain — go to rootless Podman at that point rather than
   bolting nftables onto the user model.
 - **If site two turns out to share almost nothing with site one**, the library is
-  smaller than D2 assumes and the template is doing most of the work. That is a
-  fine outcome; it just means R4 is served by `copier update` rather than by a
-  version pin, and the library should stop growing.
+  smaller than D2 assumes and the scaffold is doing most of the work. That is a
+  fine outcome; it just means `packages/core/` should stop growing and the shared
+  knowledge stays as knowledge, in
+  [`site-automation-gotchas.md`](site-automation-gotchas.md), where it already
+  is.
 - **If a second person ever gets merge rights or host access**, revisit the vault
   layout (D6), the self-healing plan's deploy-gate decision, and every place this
   document says "the operator" and means "one specific person".
