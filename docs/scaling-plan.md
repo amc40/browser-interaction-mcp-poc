@@ -466,8 +466,10 @@ a regression. In particular, expect the login framework's `LoginSteps` shape to 
 Sainsbury's-shaped, and expect at least one of the "deliberately not extracted"
 helpers to earn promotion.
 
-**Done when:** site two is live on the Pi, under its own accounts, and the time
-from "I want to automate this" to "the connector works" is measured in hours.
+**Done when:** site two is live on the Pi, under its own accounts, and the
+*ceremony* — repo, accounts, units, routes — took minutes rather than a day.
+Not the whole job: see "What it actually costs to add a site" below for why
+that is a narrower claim than it sounds.
 
 ### Stage 6 — The fleet's ongoing life
 
@@ -478,6 +480,45 @@ site). A one-page fleet status view: per app, last successful smoke run, current
 core version, open heal PRs.
 
 ---
+
+## What it actually costs to add a site
+
+Everything above attacks the ceremony: repos, accounts, units, routes, CI.
+That work is real and worth removing, and it is **not where the time goes**.
+Worth saying plainly, because a plan that only measures what it improves is
+how "adding a site is six lines of YAML" turns into a promise nobody can keep.
+
+Two tracks run in parallel for every new site. The architecture collapses the
+first one and does nothing at all to the second, which is the critical path.
+
+| | Friction | Why it bites |
+| --- | --- | --- |
+| **Removed** | Repo, CI config, gates, package skeleton | `bmcp new-site` from the template; CI becomes a `workflow_call` stub |
+| **Removed** | Accounts, units, env files, webhook, tunnel ingress | Six lines in `apps.yml` and one playbook run |
+| **Removed** | The DNS record | A wildcard `*.mcp` record means there is no per-site DNS step at all |
+| **One-off** | A GitHub OAuth app per site | Registered by hand, and it needs **two** callback URLs, not one — the MCP endpoint's and the login page's, as `env.j2` already notes. A mismatch fails opaquely at first connect |
+| **One-off** | Vault entries, then the connector in claude.ai | Client id and secret, webhook secret, the site username — one `ansible-vault` edit. Then adding the connector once |
+| **Irreducible** | Does the site block headless Chromium? | Sainsbury's and Tesco both run Akamai Bot Manager, which blocks *headless* specifically, regardless of network origin or user agent. You find out by trying. It decides `headed: true`, which decides ~400MB, which decides whether the Pi has room for app N+1 at all |
+| **Irreducible** | The consent banner's real shape | Which CMP, which cookies, which registrable domain. Pre-seeding beats clicking: the button text changed from "Required only" to "Continue without accepting" within weeks, and the backdrop silently intercepts clicks, so Playwright reports a timeout on something unrelated rather than "a banner is in the way" |
+| **Irreducible** | What the login actually does | Not knowable from the outside. The Sainsbury's recording corrected four assumptions the login flow had *already made* from reading the public site: the login path, the consent copy, MFA living on a separate domain and not always appearing, and adding straight from the result tile |
+| **Irreducible** | Whether MFA always appears | On Sainsbury's it doesn't. That single fact is why the login runs in a parked subprocess with a 300-second OTP wait rather than inside a request handler — a site with unconditional MFA would have been a much smaller design |
+| **Irreducible** | Designing the tool surface | The real work, and it is design rather than transcription. `add_to_basket` went blind-first-result → exact name → name-or-id → ellipsis-prefix fallback, and needed `sainsburys_search` to exist at all, because an index into a result list goes stale between two calls |
+| **Reduced** | Codegen output is the wrong shape | It emits `wait_until="load"`, unreliable when a background poller keeps the network busy, and unbounded list reads on grids whose non-product tiles block for Playwright's full 30-second default and take the whole call down — the two patterns [`site-automation-gotchas.md`](site-automation-gotchas.md) names first. The importer and the template's helpers carry the fixes; every one still gets reviewed |
+| **Irreducible** | One real run against the live site | `deploy-branch.sh`, SSH, run it. Nothing counts before this, and it is also the gate that promotes the site's locators into the healable set |
+
+### The cost nobody budgets for: sessions expire
+
+Every friction point above is paid once. **Re-authentication is paid forever,
+per site, by a person with a password and a phone** — and it is the one cost
+that scales linearly with the number of apps whether or not anything is going
+wrong. Five sites means five of these on a cadence you do not control and
+cannot predict.
+
+Two things follow, and both are in the plan for this reason rather than for
+tidiness: the `/…-login` page has to be genuinely usable on a phone, because
+that is where it will be used; and stage 6's `storage_state` backups matter
+more than they look, because losing one costs a full MFA round-trip rather
+than a file copy.
 
 ## What this plan does not do
 
