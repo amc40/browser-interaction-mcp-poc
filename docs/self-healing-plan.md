@@ -335,22 +335,39 @@ It also *strengthens* I1 rather than bending it. The laptop is the machine that
 holds SSH access to the Pi and a working route to the real site; the cloud
 session has neither, and can be configured so it never can.
 
-- **Environment, built once and reused by stage 4 — and it does not exist yet.**
-  Network access is a property of the *environment*, chosen when that
-  environment is created, not of the `--cloud` flag. This account currently has
-  two: "Default — trusted network access" and "Danger Zone". **Both have
-  network access; neither is usable here.** A dedicated no-network environment
-  has to be created and then verified from inside a session (try to reach
-  `sainsburys.co.uk` and confirm it fails) before any heal runs in it. Treating
-  `None` as the default is the mistake this bullet exists to prevent.
-- **Connectors are the hole that the network setting cannot show**, and on this
-  account it is not hypothetical: **this project's own deployed MCP server is
-  connected**, exposing `sainsburys_search` and `sainsburys_add_to_basket`.
-  Connector traffic goes through Anthropic's servers rather than the session's
-  network, so a healing session with that connector enabled can drive the real
-  site — I1 violated outright — with the network policy still reading `None`.
-  The connector list must be explicitly empty, and re-checked whenever
-  connectors are added to the account for unrelated reasons.
+- **One environment, created once, selected per session.** Environments are
+  saved, reusable configuration — you make the healing one once and it is reused
+  by every heal, including stage 4's automatic runs. `/remote-env` in the
+  terminal opens a picker and writes your choice to `remote.defaultEnvironmentId`
+  in user settings, which is what `claude --cloud` then uses; a routine names its
+  own environment in the routine editor, so the automatic path needs no CLI step
+  at all. This account currently has "Default — trusted network access" and
+  "Danger Zone", so the healing environment is a third one to create — not a new
+  one per heal.
+- **Do not pin it in this repository's project settings**, tempting as that is.
+  Project settings outrank user settings for `remote.defaultEnvironmentId`, so
+  committing it would send *every* `--cloud` session from this checkout into the
+  healing environment, including ordinary development ones that need to
+  `uv sync`. Select it deliberately with `/remote-env` for heal work; let the
+  routine carry it for the automatic path.
+- **The requirement is that the target site is unreachable, not that nothing
+  is.** The four levels are `None`, `Trusted`, `Full` and `Custom`. `None` is the
+  strongest, and it breaks dependency installs — the docs are explicit that
+  package installs fail at `None`, which would stop the session running the
+  replay it exists to run. **`Custom`, allowing the default package-registry list
+  and nothing else, is the right choice here:** `uv sync` works, sainsburys.co.uk
+  is not on the list, and the allowlist is explicit and auditable rather than
+  inherited. Verify it from inside a session once, by trying to reach the site
+  and confirming it fails.
+- **Two documented paths ignore the level entirely**, and both must stay empty:
+  - **MCP connectors**, whose traffic travels through Anthropic's servers. On
+    this account that is not hypothetical — **this project's own deployed MCP
+    server is connected**, exposing `sainsburys_search` and
+    `sainsburys_add_to_basket`. A healing session holding that connector can
+    drive the real site with the network level still reading `Custom` or `None`.
+  - **API credentials attached to the environment**, which the agent proxy
+    attaches to matching hosts whether or not the allowlist would permit them.
+    The healing environment gets none.
 - **One new hazard the laptop framing hid:** these environments ship Chromium
   preinstalled. A session with a browser *and* network access is one navigation
   away from the live site, which is exactly what I1 forbids. Network `None` is

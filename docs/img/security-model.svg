@@ -38,9 +38,9 @@
     <!-- 5 -->
     <rect x="1109" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
     <text x="1125" y="176" font-size="16" font-weight="700" fill="#1c1a17">5 · Cloud session</text>
-    <text x="1125" y="199" font-size="13" fill="#6b6660">Needs a no-network environment</text>
-    <text x="1125" y="217" font-size="13" fill="#6b6660">and an empty connector list.</text>
-    <text x="1125" y="235" font-size="13" font-weight="600" fill="#b45309">Neither exists yet — build it.</text>
+    <text x="1125" y="199" font-size="13" fill="#6b6660">Custom allowlist: registries only.</text>
+    <text x="1125" y="217" font-size="13" fill="#6b6660">No connectors, no API credentials.</text>
+    <text x="1125" y="235" font-size="13" font-weight="600" fill="#b45309">Environment still to build.</text>
 
     <!-- 6 -->
     <rect x="1375" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
@@ -86,9 +86,9 @@
     <rect x="45" y="374" width="5" height="126" fill="#b45309"/>
     <text x="70" y="404" font-size="16" font-weight="700" fill="#7c3f06">I1 · The agent never runs anything against the real site</text>
     <text x="70" y="429" font-size="13.5" fill="#5c5348">No credential for Sainsbury's exists off the Pi · the only browser target is a file:// snapshot · the bundle is a static capture with no re-capture path back</text>
-    <text x="70" y="449" font-size="13.5" fill="#5c5348">to the Pi · and, still to build: a no-network environment (today's are "Default — trusted" and "Danger Zone") with an explicitly empty connector list.</text>
-    <text x="70" y="470" font-size="13" font-style="italic" fill="#9a6a2a">Does not stop: the model API is an egress channel by construction. And a connector bypasses the network setting entirely — this account has one for this</text>
-    <text x="70" y="488" font-size="13" font-style="italic" fill="#9a6a2a">very server, so a session left holding it can drive the real site while the network policy still reads None.</text>
+    <text x="70" y="449" font-size="13.5" fill="#5c5348">to the Pi · and, still to build: an environment on a Custom allowlist of package registries only, so installs work and the site is simply not on the list.</text>
+    <text x="70" y="470" font-size="13" font-style="italic" fill="#9a6a2a">Does not stop: the model API is an egress channel by construction. Connectors and environment API credentials bypass the allowlist entirely — this account</text>
+    <text x="70" y="488" font-size="13" font-style="italic" fill="#9a6a2a">has a connector for this very server, so a session left holding it can drive the real site whatever the network level says.</text>
   </g>
 
   <g>
