@@ -133,6 +133,13 @@ what the server runs.
 [`docs/self-healing-plan.md`](docs/self-healing-plan.md) is the staged plan for
 building it against the infrastructure that now exists.
 
+One site is a proof of concept; several is an architecture.
+[`docs/scaling-plan.md`](docs/scaling-plan.md) is the plan for that — a shared
+core library, a repo per site generated from a Playwright codegen recording,
+and a deployment where each app's files and process are owned by its own
+account, so an exposure in one cannot reach another's session. It folds in
+what self-healing looks like across a fleet rather than one repository.
+
 ## Getting started
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -234,6 +241,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
+| `docs/scaling-plan.md` | Architecture and staged plan for many sites: shared library, repo per site, per-app isolation on the Pi |
 | `docs/site-automation-gotchas.md` | Failure patterns found driving the real site, for when this generalises |
 | `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
 | `scripts/sainsburys_login.py` | Run locally, by hand, with your own credentials: logs in to Sainsbury's for real and captures the session `add_to_basket` replays |
