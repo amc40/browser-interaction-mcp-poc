@@ -308,13 +308,10 @@ an OAuth App may register **up to ten redirect URIs**, and each one can
 optionally enable **wildcard matching** across subdomains and subpaths.
 
 Each app needs two callbacks — the MCP endpoint's `/auth/callback` and the login
-page's — so ten URIs covers five apps with explicit, auditable URLs. That is the
-recommended setting: **adding a site becomes editing one app's URI list rather
-than registering a new app**, and the wildcard's "any subdomain or subpath of
-this" property stays switched off, which matters here because a wildcard redirect
-sitting behind a wildcard DNS record is a wider grant than it looks. Past five
-apps, turn wildcard matching on for `https://*.mcp.example.com/` and the step
-disappears entirely.
+page's — so ten URIs would cover five apps with explicit, auditable URLs, and
+adding a site would mean editing one app's URI list rather than registering a new
+app. **D10 removes both callbacks instead**, so this budget stops being a limit
+on fleet size at all; read that decision before acting on this one.
 
 Note the changelog's own warning while doing it: **an app with only one redirect
 URI has wildcard matching on by default** — legacy behaviour, now visible and
@@ -455,6 +452,88 @@ deciding placement deliberately once rather than shuffling.
 commit affects; it now maps each to that app's own webhook URL, which comes from
 `apps.yml` like everything else. A change to `packages/core/` becomes N signed
 requests across however many hosts, instead of one.
+
+### D10 — Commonising the login, so a new site needs no new redirect
+
+Two GitHub redirects per app: the MCP endpoint's `/auth/callback` and the browser
+login page's. Ten URIs on one OAuth app therefore stretches to five sites, and
+adding a site means editing that app. Both can go — by different means, because
+the two flows have different *clients*.
+
+| Flow | Client | Why it can't share the other's gate | Fix | Redirects removed |
+| --- | --- | --- | --- | --- |
+| The `/login` page | The operator's browser | It is interactive, so an edge gate works — and it is the flow that currently hand-rolls GitHub OAuth | **Cloudflare Access** in front of the path | one per app |
+| The `/mcp` endpoint | claude.ai's connector | It performs the OAuth flow itself and cannot send Access's service-token headers, so Access in front of it breaks the connector | **Wildcard matching** on one registered redirect | one per app |
+
+**The login page: put it behind Cloudflare Access, and delete the OAuth code.**
+
+- One Access application, hostname `*.mcp.example.com`, path `/login*`. Access
+  supports [wildcard subdomains and path-scoped applications](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths),
+  matched most-specific-first, so this is configured once and covers every app
+  that will ever exist. Everything else on the hostname is simply not an Access
+  application, so `/mcp` and `/deploy-webhook` are never intercepted.
+- **Standardise the path**: today it is `/sainsburys-login`, per site. In core it
+  becomes `/login` for every app, which is exactly what makes one wildcard rule
+  sufficient. Cheap now, awkward later.
+- The app **verifies** the `Cf-Access-Jwt-Assertion` header rather than trusting
+  its presence — signature against the team's JWKS, `aud` against the Access
+  application's AUD tag, issuer, expiry, identity. One Access application means
+  one fleet-wide AUD, so one config value.
+- This **deletes `login_oauth.py`** — the code the README already flags as having
+  skipped the 100% coverage gate and never had a `/security-review`. Replacing a
+  hand-rolled OAuth-and-cookie gate with a verified JWT from the edge that
+  already terminates the TLS is a strict improvement, and it closes an open item
+  instead of adding one.
+- Verify wildcard *application* support on the account's plan before relying on
+  it. If it is not available, one Access application per hostname is still
+  configuration rather than code, and still removes the GitHub redirect.
+
+**The MCP endpoint: wildcard matching on a single registered redirect.**
+
+- Register `https://mcp.example.com/` once with wildcard matching enabled, and
+  every `<slug>.mcp.example.com/auth/callback` matches it. Zero per-app
+  registration, and D4's ten-URI budget stops being a limit on fleet size.
+- The residual risk is bounded, and worth stating rather than glossing: a
+  wildcard-delivered authorisation code is only useful together with the client
+  secret, which never leaves the hosts, and the app requests no scopes and still
+  checks `sub` against one numeric ID. It takes two compromises, not one.
+- What it does rest on is controlling every name under the zone. With wildcard
+  DNS pointing at your own tunnels and ingress returning 404 for unmatched
+  hostnames, that holds — but do not point that wildcard anywhere else, and do
+  not leave a decommissioned subdomain dangling.
+
+**Result: per-app auth work goes to zero**, and the "+2 callback URLs" step
+leaves the ceremony track entirely.
+
+#### The alternative, if the client secret ever needs to leave the app processes
+
+A **fleet auth host**: one small service holding the GitHub client secret and
+acting as the fleet's identity provider, with each app's FastMCP pointed at it
+rather than at github.com. Per-app redirect registration then moves out of
+GitHub's web UI and into a config file Ansible generates from `apps.yml` —
+automatic rather than manual.
+
+The real argument for it is not convenience. Under D4 the client secret sits in
+the environment of **every process that drives a hostile web page**. An auth host
+never renders one, so it can carry the systemd hardening the app units must omit
+for Chromium's sake — `MemoryDenyWriteExecute`, `RestrictNamespaces`,
+`SystemCallFilter=@system-service`. Sign its assertions with Ed25519 and each app
+holds only a public key, so compromising one app mints nothing for another.
+
+Against it: a new service to write and hold to the 100% gate; hand-rolled
+identity code is precisely the wrong thing to hand-roll, so it means adopting
+something like Authelia rather than writing one; and it couples every app's
+authentication to one host's availability, which D9 has just finished
+distributing. **Not now** — named so that it stays a decision rather than
+becoming a discovery.
+
+#### An asterisk worth writing down while we are here
+
+TLS terminates at Cloudflare's edge, so **the site password typed into `/login`
+is visible to Cloudflare in the request body**. That is already true of this
+deployment and none of the above changes it — but it belongs in the record,
+because "the server never holds a password" has always had this second asterisk
+beside it, alongside the one the README already names.
 
 ---
 
@@ -675,7 +754,7 @@ first one and does nothing at all to the second, which is the critical path.
 | **Removed** | Repo, CI config, gates, package skeleton | `bmcp new-site` writes a directory under `packages/`. There is no repository to create, no CI to configure and no gate config to copy — the workspace already has one of each |
 | **Removed** | Accounts, units, env files, webhook, tunnel ingress | Six lines in `apps.yml` and one playbook run |
 | **Removed** | The DNS record | A wildcard `*.mcp` record means there is no per-site DNS step at all |
-| **One-off** | Two callback URLs added to the fleet's OAuth app | Editing one app's URI list, not registering a new app — see D4. A mismatch still fails opaquely at first connect |
+| **Removed** | Anything to do with authentication | D10: the `/login` page sits behind one wildcard Cloudflare Access application, and the MCP endpoint's redirect uses wildcard matching on a single registered URI. Neither needs touching when a site is added |
 | **One-off** | The connector in claude.ai | A UI action, once per site, and the one step with no automatable path at all. The vault barely features any more: the client id and secret are fleet-wide, the webhook secret is generated by Ansible rather than typed, so all that is left per site is the account username — and only for sites that log in |
 | **Irreducible** | Does the site block headless Chromium? | Sainsbury's and Tesco both run Akamai Bot Manager, which blocks *headless* specifically, regardless of network origin or user agent. You find out by trying. It decides `headed: true`, which decides ~400MB, which decides whether the Pi has room for app N+1 at all |
 | **Reduced** | The consent banner's real shape | The market is concentrated — OneTrust, Cookiebot, Didomi, Sourcepoint, Usercentrics, TrustArc — and many implement IAB TCF, which exposes a standard `window.__tcfapi`. So core carries a **CMP registry**: per CMP, a detection fingerprint, the cookies to pre-seed for reject-all, and the fallback selectors. A `bmcp probe <url>` command opens the page and reports which one a site uses, turning research into confirmation. What stays per-site is the *values* — OneTrust's `OptanonConsent` encodes group ids configured per site, and the registrable domain differs — read once from the site's own cookie-declaration table |
