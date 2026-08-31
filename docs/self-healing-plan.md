@@ -11,6 +11,21 @@ agent never runs anything against the real site, **I2** it never changes what
 the MCP server executes, **I3** the failure evidence is as sensitive as the
 browser profile.
 
+## The security model at a glance
+
+![The self-healing security model: the evidence path from the live page through
+capture, redaction, bundling, the cloud session and CI, what each invariant
+rests on, and what is left over](img/security-model.svg)
+
+Read the diagram as three claims. The top row is the path a page takes to
+become a pull request, with the gate that each step *is* — every one of them an
+absence (no durable copy, no credential, no route) rather than a rule someone
+remembers. The middle bands say what holds each invariant up and, in italics,
+what that invariant does **not** cover; those lines are the honest part and are
+worth more than the rest. The bottom row is what no layer addresses at all.
+
+The sections below are the same model at working depth.
+
 ## What has changed since the design was written
 
 | Design assumed | Repository now | Consequence |

@@ -114,6 +114,11 @@ file and rerunning the login script.
 
 ## 8. Isolate the browser from the server
 
+*Where this sits in the whole picture:
+[the security model diagram](self-healing-plan.md#the-security-model-at-a-glance)
+puts it under "what is left over" — deliberately, see the scope note below.*
+
+
 There is currently no boundary between the two. `tools.py` calls
 `sainsburys.py`, which calls `browser_page()`, which starts Playwright **inside
 the FastMCP process**: Chromium is a separate OS process, but the storage state,

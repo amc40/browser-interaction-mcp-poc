@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1650" height="1000" viewBox="0 0 1650 1000" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="1650" height="1000" fill="#fbfaf8"/>
+  <text x="45" y="52" font-size="27" font-weight="700" fill="#1c1a17">Self-healing security model</text>
+  <text x="45" y="80" font-size="15.5" fill="#6b6660">Each layer is an absence — no credential, no route, no durable copy — rather than a rule something remembers to follow.</text>
+
+  <text x="45" y="128" font-size="13" font-weight="700" fill="#8a8378" letter-spacing="1.2">THE EVIDENCE PATH, AND WHAT GATES IT</text>
+
+  <!-- stage boxes -->
+  <g>
+    <!-- 1 -->
+    <rect x="45" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="61" y="176" font-size="16" font-weight="700" fill="#1c1a17">1 · Live page</text>
+    <text x="61" y="199" font-size="13" fill="#6b6660">On the Pi. Headed Chromium,</text>
+    <text x="61" y="217" font-size="13" fill="#6b6660">the operator's real session.</text>
+    <text x="61" y="235" font-size="13" font-style="italic" fill="#9d174d">The source of every risk below.</text>
+
+    <!-- 2 -->
+    <rect x="311" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="327" y="176" font-size="16" font-weight="700" fill="#1c1a17">2 · Capture</text>
+    <text x="327" y="199" font-size="13" fill="#6b6660">Trace under PrivateTmp,</text>
+    <text x="327" y="217" font-size="13" fill="#6b6660">deleted with the bundle.</text>
+    <text x="327" y="235" font-size="13" font-weight="600" fill="#0f766e">Nothing durable to leak.</text>
+
+    <!-- 3 -->
+    <rect x="577" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="593" y="176" font-size="16" font-weight="700" fill="#1c1a17">3 · Redact</text>
+    <text x="593" y="199" font-size="13" fill="#6b6660">Attribute allowlist. Drop script,</text>
+    <text x="593" y="217" font-size="13" fill="#6b6660">meta, query strings, input values.</text>
+    <text x="593" y="235" font-size="13" font-weight="600" fill="#0f766e">Tokens removed at source.</text>
+
+    <!-- 4 -->
+    <rect x="843" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="859" y="176" font-size="16" font-weight="700" fill="#1c1a17">4 · Bundle</text>
+    <text x="859" y="199" font-size="13" fill="#6b6660">One subtree, self-contained.</text>
+    <text x="859" y="217" font-size="13" fill="#6b6660">gitleaks, failing closed.</text>
+    <text x="859" y="235" font-size="13" font-weight="600" fill="#0f766e">Small enough to be read.</text>
+
+    <!-- 5 -->
+    <rect x="1109" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="1125" y="176" font-size="16" font-weight="700" fill="#1c1a17">5 · Cloud session</text>
+    <text x="1125" y="199" font-size="13" fill="#6b6660">Network None, no connectors,</text>
+    <text x="1125" y="217" font-size="13" fill="#6b6660">no site credentials, file:// only.</text>
+    <text x="1125" y="235" font-size="13" font-weight="600" fill="#0f766e">Could not reach the site.</text>
+
+    <!-- 6 -->
+    <rect x="1375" y="146" width="228" height="96" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="1391" y="176" font-size="16" font-weight="700" fill="#1c1a17">6 · PR + CI</text>
+    <text x="1391" y="199" font-size="13" fill="#6b6660">Locator-only diff, replay,</text>
+    <text x="1391" y="217" font-size="13" fill="#6b6660">cropped outline render.</text>
+    <text x="1391" y="235" font-size="13" font-weight="600" fill="#0f766e">Review sees which element.</text>
+  </g>
+
+  <!-- arrows between stages -->
+  <g stroke="#b9b3aa" stroke-width="1.6" fill="none">
+    <path d="M273 194 h30" marker-end="url(#a)"/>
+    <path d="M539 194 h30" marker-end="url(#a)"/>
+    <path d="M805 194 h30" marker-end="url(#a)"/>
+    <path d="M1071 194 h30" marker-end="url(#a)"/>
+    <path d="M1337 194 h30" marker-end="url(#a)"/>
+  </g>
+  <defs>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0 0 L9 4.5 L0 9 z" fill="#b9b3aa"/>
+    </marker>
+    <marker id="b" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0 0 L9 4.5 L0 9 z" fill="#8a8378"/>
+    </marker>
+  </defs>
+
+  <!-- hand-carry annotation between 4 and 5 -->
+  <text x="1086" y="130" font-size="12" font-weight="600" fill="#b45309" text-anchor="middle">operator reads it,</text>
+  <text x="1086" y="145" font-size="12" font-weight="600" fill="#b45309" text-anchor="middle">then pushes</text>
+
+  <!-- return path -->
+  <g>
+    <path d="M1489 242 v46 H160 v-46" stroke="#8a8378" stroke-width="1.6" fill="none" stroke-dasharray="5 4" marker-end="url(#b)"/>
+    <rect x="600" y="272" width="420" height="32" rx="6" fill="#fbfaf8"/>
+    <text x="810" y="294" font-size="13.5" fill="#4a453e" text-anchor="middle">you merge to protected main → webhook → the Pi runs the new locator</text>
+  </g>
+
+  <!-- invariants -->
+  <text x="45" y="356" font-size="13" font-weight="700" fill="#8a8378" letter-spacing="1.2">WHAT EACH INVARIANT RESTS ON</text>
+
+  <g>
+    <rect x="45" y="374" width="1558" height="104" rx="8" fill="#fdf6ee" stroke="#eadfd0"/>
+    <rect x="45" y="374" width="5" height="104" fill="#b45309"/>
+    <text x="70" y="404" font-size="16" font-weight="700" fill="#7c3f06">I1 · The agent never runs anything against the real site</text>
+    <text x="70" y="429" font-size="13.5" fill="#5c5348">Network None on the session · no credential for Sainsbury's exists off the Pi · the only browser target is a file:// snapshot · the bundle is a static capture with no</text>
+    <text x="70" y="449" font-size="13.5" fill="#5c5348">re-capture path back to the Pi · connector list explicitly empty, because connector traffic bypasses the network setting entirely.</text>
+    <text x="70" y="470" font-size="13" font-style="italic" fill="#9a6a2a">Does not stop: the model API is an egress channel by construction — that is inherent to asking a model about a page.</text>
+  </g>
+
+  <g>
+    <rect x="45" y="492" width="1558" height="104" rx="8" fill="#eef3fd" stroke="#d6e0f5"/>
+    <rect x="45" y="492" width="5" height="104" fill="#1d4ed8"/>
+    <text x="70" y="522" font-size="16" font-weight="700" fill="#1e3a8a">I2 · The agent never changes what the MCP server executes</text>
+    <text x="70" y="547" font-size="13.5" fill="#48505f">Session pushes only claude/** and cannot merge · main is a protected branch · CI rejects a heal branch whose diff leaves the locator table · which actions exist</text>
+    <text x="70" y="567" font-size="13.5" fill="#48505f">stays in tools.py, reviewed by a human · no auto-merge · the heal workflow runs on pull_request, never pull_request_target, and holds no secrets.</text>
+    <text x="70" y="588" font-size="13" font-style="italic" fill="#5b6ea8">Does not stop: merge is deploy — the webhook ships on green main, so your merge click is the last gate. Accepted, recorded, revisit if it bites.</text>
+  </g>
+
+  <g>
+    <rect x="45" y="610" width="1558" height="124" rx="8" fill="#fdeff4" stroke="#f3d7e2"/>
+    <rect x="45" y="610" width="5" height="124" fill="#9d174d"/>
+    <text x="70" y="640" font-size="16" font-weight="700" fill="#831843">I3 · The failure evidence is as sensitive as the browser profile</text>
+    <text x="70" y="665" font-size="13.5" fill="#5f4650">Raw trace never durably stored · redaction runs at capture, on the Pi · allowlist not blocklist · script, template, meta and URL query strings dropped wholesale ·</text>
+    <text x="70" y="685" font-size="13.5" fill="#5f4650">input values always scrubbed, which is what covers a password the redactor never learned · fixture is one subtree, not a page · gitleaks fails closed · failure PNGs</text>
+    <text x="70" y="705" font-size="13.5" fill="#5f4650">never leave the Pi · the published render is derived from the redacted fixture, so pixels cannot show what the DOM no longer holds.</text>
+    <text x="70" y="726" font-size="13" font-style="italic" fill="#a4517a">Does not stop: this repository is public — a leak is permanent. gitleaks matches known shapes, not a bespoke session cookie. A human still reads the fixture.</text>
+  </g>
+
+  <!-- residuals -->
+  <text x="45" y="778" font-size="13" font-weight="700" fill="#8a8378" letter-spacing="1.2">WHAT IS LEFT OVER</text>
+  <g>
+    <rect x="45" y="796" width="380" height="118" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="66" y="824" font-size="15" font-weight="700" fill="#1c1a17">The model sees the fixture</text>
+    <text x="66" y="848" font-size="13" fill="#6b6660">Redaction governs what travels with the</text>
+    <text x="66" y="867" font-size="13" fill="#6b6660">prompt; it does not make the channel go</text>
+    <text x="66" y="886" font-size="13" fill="#6b6660">away. A one-control subtree is small</text>
+    <text x="66" y="905" font-size="13" fill="#6b6660">enough to be comfortable about.</text>
+
+    <rect x="437" y="796" width="380" height="118" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="458" y="824" font-size="15" font-weight="700" fill="#1c1a17">Publication is irreversible</text>
+    <text x="458" y="848" font-size="13" fill="#6b6660">A public commit is forked and cached.</text>
+    <text x="458" y="867" font-size="13" fill="#6b6660">The remedy is rotation, not deletion:</text>
+    <text x="458" y="886" font-size="13" fill="#6b6660">sign out and rerun the login. Keep that</text>
+    <text x="458" y="905" font-size="13" fill="#6b6660">cheap, and reach for it first.</text>
+
+    <rect x="829" y="796" width="380" height="118" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="850" y="824" font-size="15" font-weight="700" fill="#1c1a17">The browser shares the server</text>
+    <text x="850" y="848" font-size="13" fill="#6b6660">A sandbox escape lands next to the OAuth</text>
+    <text x="850" y="867" font-size="13" fill="#6b6660">secret and the live session. Addressed by</text>
+    <text x="850" y="886" font-size="13" fill="#6b6660">deployment.md §8 — separate concern,</text>
+    <text x="850" y="905" font-size="13" fill="#6b6660">not a prerequisite for any of the above.</text>
+
+    <rect x="1221" y="796" width="380" height="118" rx="8" fill="#ffffff" stroke="#dcd8d1"/>
+    <text x="1242" y="824" font-size="15" font-weight="700" fill="#1c1a17">Quiet failure</text>
+    <text x="1242" y="848" font-size="13" fill="#6b6660">A heal that merges, deploys and breaks</text>
+    <text x="1242" y="867" font-size="13" fill="#6b6660">something the snapshot could not show.</text>
+    <text x="1242" y="886" font-size="13" fill="#6b6660">Per-call logging (§9) is the raw material;</text>
+    <text x="1242" y="905" font-size="13" fill="#6b6660">nothing detects it today.</text>
+  </g>
+
+  <text x="45" y="952" font-size="12.5" fill="#9a948b">docs/self-healing-plan.md · docs/self-healing.md · docs/deployment.md</text>
+</svg>
