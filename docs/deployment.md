@@ -112,7 +112,73 @@ keep the session scoped as narrowly as Sainsbury's permits, and have a tested
 way to revoke it quickly — signing out on Sainsbury's, or just deleting the
 file and rerunning the login script.
 
-## 8. Log who did what
+## 8. Isolate the browser from the server
+
+*Where this sits in the whole picture:
+[the security model diagram](self-healing-plan.md#the-security-model-at-a-glance)
+puts it under "what is left over" — deliberately, see the scope note below.*
+
+
+There is currently no boundary between the two. `tools.py` calls
+`sainsburys.py`, which calls `browser_page()`, which starts Playwright **inside
+the FastMCP process**: Chromium is a separate OS process, but the storage state,
+the parsed page content and the automation code all live in the server. Same
+user, same unit, same `EnvironmentFile` — so the process handling untrusted page
+content is the process holding the OAuth client secret. The one existing process
+split, `sainsburys_login_worker`, is a robustness boundary and says so in its own
+docstring: it exists so a hung Chromium can be killed, it inherits the parent's
+whole environment, and it runs as the same user.
+
+The cost shows up in the unit file, where three sandboxing directives are
+switched off with a comment explaining that Chromium needs them:
+`MemoryDenyWriteExecute` (V8 JIT), `RestrictNamespaces` (the renderer sandbox)
+and `SystemCallFilter` (same). **The browser's requirements set the sandbox
+floor for the server as well**, which is the clearest statement of the problem:
+one process is as weak as the weakest thing in it.
+
+**Scope, so this is not over-sold.** What the split addresses is a page
+escaping Chromium's own sandbox and landing next to the OAuth client secret,
+the deploy checkout and the server's network position. It does *not* do much
+for the risk of failure evidence carrying a secret out to a public repository —
+that leak travels through the bundle, the operator's fetch and a commit, and is
+governed by redacting at capture time and never durably storing the raw trace,
+which one process manages as well as two. Treat this section as defence in
+depth against a browser exploit, not as a prerequisite for
+[`self-healing-plan.md`](self-healing-plan.md).
+
+The proportionate fix is a second unit, not a container:
+
+- A long-lived `browser-worker` running as its own user, talking to the server
+  over a Unix socket with one message per pre-approved action — the same shape
+  the tools already have, and the same pattern `sainsburys_login_worker` already
+  proves, made long-lived and given its own identity.
+- The server unit then gets the three strict directives back, because it no
+  longer hosts a browser.
+- The worker gets no `EnvironmentFile` beyond what it needs, `ReadWritePaths`
+  limited to the profile directory, and its own state directory.
+- The `storage_state` file becomes owned by the worker and **unreadable by the
+  server**, so the thing §7 calls the most valuable asset on the box stops being
+  reachable from the process that terminates OAuth and faces the network.
+
+What that buys is a smaller blast radius, not immunity. A page that escapes
+Chromium's own sandbox still lands next to the live session, which is the thing
+worth stealing; what it no longer lands next to is the OAuth client secret, the
+deploy checkout and the server's network position. Worth being clear that this
+reduces the loss rather than preventing it — and that encryption at rest (§7)
+does not help against a worker that must decrypt the session to use it.
+
+A rootless container per action is stronger and is the next step up if this
+turns out to be insufficient; on a Pi it costs memory and per-call startup for
+a boundary the two-unit split already establishes. A separate machine is the
+step after that, and is disproportionate for a proof of concept.
+
+One consequence for [`self-healing.md`](self-healing.md): once the browser is
+split out, failure captures and their redaction belong on the worker's side of
+the socket. The raw trace is exactly the sensitive artefact this section is
+about, and it should never cross into the server process — the server should
+only ever see a redacted bundle, or a path to one.
+
+## 9. Log who did what
 
 Nothing currently records which tool ran, when, or on whose authority. On a
 laptop the answer is always "the operator". Deployed, an authenticated `sub` and

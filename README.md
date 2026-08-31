@@ -130,6 +130,8 @@ Browser actions go stale as pages change.
 reads a redacted capture of the failure and opens a PR against the selectors —
 with no credentials for the automated service, no route to it, and no path to
 what the server runs.
+[`docs/self-healing-plan.md`](docs/self-healing-plan.md) is the staged plan for
+building it against the infrastructure that now exists.
 
 ## Getting started
 
@@ -315,20 +317,18 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
 - **Authentication on stdio**, which cannot carry credentials at all. The http
   transport binds to loopback by default for the same reason. See
   [SDR 0001](docs/sdr/0001-github-authentication.md).
-- **Verifying `sainsburys_add_to_basket` and the `/sainsburys-login` flow
-  against the real, logged-in site.** Both are written and tested against a
-  fake page, and their selectors (login path, consent copy, MFA domain,
-  login-form field ids, search box, result-tile add control) come from a
-  real recording, so they're believed correct. But nobody has actually run
-  either against the real site: not `scripts/sainsburys_login.py` with real
-  credentials, not `/sainsburys-login` on the deployed Pi, and not
-  `add_to_basket` against a session either of those produced. "Believed
-  correct" is as far as this goes without that run.
-- **Hardening `/sainsburys-login`.** It works as a POC but the branch that
-  added it skipped the 100% coverage gate, has no `/security-review` on it,
-  and hasn't been through an end-to-end run. The GitHub session cookie is
-  the whole gate on a public endpoint that accepts a password; the concurrency
-  is one in-process subprocess with a wall-clock kill.
+- **Running `scripts/sainsburys_login.py` against the real site.** The
+  deployed path has been done end to end - signing in at `/sainsburys-login`
+  on the Pi, then searching and adding to the basket with the session it
+  captured, so the login-form field ids, consent handling, MFA step, search
+  box and result-tile add control are all confirmed against the live site.
+  The local script writes the same file by the same flow, but hasn't been run
+  with real credentials itself.
+- **Hardening `/sainsburys-login`.** It works - see above - but the branch
+  that added it skipped the 100% coverage gate and has no `/security-review`
+  on it. The GitHub session cookie is the whole gate on a public endpoint
+  that accepts a password; the concurrency is one in-process subprocess with
+  a wall-clock kill.
 - **Encrypting the captured session at rest.** `sainsburys_login.py` and the
   login subprocess both write the `storage_state` file with owner-only
   permissions, but it's still a plaintext file on disk holding a working
