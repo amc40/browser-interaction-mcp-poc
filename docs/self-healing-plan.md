@@ -115,7 +115,12 @@ What can actually be in a capture of a logged-in page:
 | Session cookies, `Authorization` / `Cookie` / `Set-Cookie` | Trace network entries, storage state | **Never captured.** Not redacted afterwards — the bundle builder has no code path that reads them |
 | Tokens in the markup | Hydration blobs (`window.__INITIAL_STATE__`), CSRF `<meta>` tags, hidden inputs, `data-*` attributes, `?token=`/`?sid=` in link URLs | **Drop `<script>`, `<template>`, inline `on*` handlers and every `<meta>` but charset, wholesale**, strip query strings and fragments from every URL, and keep only allowlisted attributes. None of that is needed to resolve a locator, so dropping it costs nothing |
 | The operator's own credentials | Anywhere | `redaction.build_redactor(settings)`, which already covers every `SecretStr` in every encoding. **Note the gap:** a password typed into `/sainsburys-login` never reaches `Settings`, so the redactor does not know it. The "scrub every input `value`, `textarea` and `contenteditable`" rule is what covers it, and it has to be unconditional for that reason |
-| Personal data — name, address, orders, basket | Text nodes, `alt`/`title`/`aria-label` | The subtree rule, plus committing the failing action's subtree rather than the page. Not a secret, still not publishable |
+| One-time URLs | `?login_challenge=`, password-reset and magic links, `?token=` — this site's own login already carries a `login_challenge` | Query strings and fragments stripped from every URL, and `href` reduced to its path |
+| An on-screen OTP | The MFA step, in pixels and in the input's `value` | Input values always scrubbed; failure PNGs never leave the Pi. `sainsburys.py` already flags this hazard on its debug screenshot |
+| Tokens an app logs about itself | `console.log`, and response bodies summarised in `network.jsonl` | Keep console entries only for the failing step, drop message bodies over a size cap, and record method/path/status only — never bodies or query strings |
+| A secret inside a traceback | `error.txt`, where a frame's locals can render a password | Run `SecretRedactor` over `error.txt` too, not just over log records. This is the file most likely to be forgotten, because it looks like just an exception |
+| Whatever the agent quotes | The PR title, body and commit messages it writes — all public | The agent may name the locator id and its new value, and must not paste fixture content into PR prose. Worth stating in the routine's prompt, and cheap to check at review |
+| Personal data — name, address, orders, basket, Nectar number | Text nodes, `alt`/`title`/`aria-label` | The subtree rule, plus committing the failing action's subtree rather than the page. Not a secret, still not publishable |
 
 Four structural controls, in the order they act:
 
@@ -163,6 +168,17 @@ Two properties worth naming because they are the reason this is tractable:
   rotation is a real mitigation, and worth keeping cheap. Plan for it as the
   response rather than assuming detection: if a bundle turns out to have carried
   a token, rotate first, then work out how it got through.
+
+**Host secrets are a different matter, and stay out by construction.** The
+GitHub OAuth client secret, the deploy webhook HMAC secret, the tunnel
+credentials and the `storage_state` file are never *in* a page capture — the
+risk with them is a bundle builder that helpfully includes environment or
+configuration. It must not: the bundle is assembled from the trace and the
+manifest's fixed field list, never from `os.environ`, and
+[`self-healing.md`](self-healing.md) already forbids passing bundles through
+environment variables in the other direction. Note also that git history keeps
+a fixture that a later commit trims, so "fix it in the next commit" is not a
+remedy on a public repository.
 
 **The residual, stated plainly:** the model sees the fixture. The Anthropic API
 is an outbound channel by construction — the design says so — and redaction
@@ -319,11 +335,22 @@ It also *strengthens* I1 rather than bending it. The laptop is the machine that
 holds SSH access to the Pi and a working route to the real site; the cloud
 session has neither, and can be configured so it never can.
 
-- **Environment, built once and reused by stage 4:** repository attached,
-  connector list **explicitly empty**, network `None`. Empty connectors is the
-  design's sharpest point — connector traffic bypasses the network setting
-  entirely, so a Slack or Notion connector left on is an egress path for page
-  content that the network policy will not show.
+- **Environment, built once and reused by stage 4 — and it does not exist yet.**
+  Network access is a property of the *environment*, chosen when that
+  environment is created, not of the `--cloud` flag. This account currently has
+  two: "Default — trusted network access" and "Danger Zone". **Both have
+  network access; neither is usable here.** A dedicated no-network environment
+  has to be created and then verified from inside a session (try to reach
+  `sainsburys.co.uk` and confirm it fails) before any heal runs in it. Treating
+  `None` as the default is the mistake this bullet exists to prevent.
+- **Connectors are the hole that the network setting cannot show**, and on this
+  account it is not hypothetical: **this project's own deployed MCP server is
+  connected**, exposing `sainsburys_search` and `sainsburys_add_to_basket`.
+  Connector traffic goes through Anthropic's servers rather than the session's
+  network, so a healing session with that connector enabled can drive the real
+  site — I1 violated outright — with the network policy still reading `None`.
+  The connector list must be explicitly empty, and re-checked whenever
+  connectors are added to the account for unrelated reasons.
 - **One new hazard the laptop framing hid:** these environments ship Chromium
   preinstalled. A session with a browser *and* network access is one navigation
   away from the live site, which is exactly what I1 forbids. Network `None` is
