@@ -104,12 +104,13 @@ What can actually be in a capture of a logged-in page:
 
 Four structural controls, in the order they act:
 
-1. **Redact at the source, and never keep the raw.** The trace is written inside
-   the browser worker's own state directory ([`deployment.md`
-   §8](deployment.md)), the redactor consumes it there, and the raw file is
-   deleted in the same operation that produces the bundle. Nothing that can
-   upload, commit or serve a file ever has a path to an unredacted capture. This
-   is the control that matters; the rest are nets under it.
+1. **Never durably store the raw capture.** The trace is written under the
+   unit's `PrivateTmp` (already set, and destroyed on restart), the redactor
+   consumes it in place, and it is deleted in the same operation that produces
+   the bundle. Two directories with two meanings: `traces/` is ephemeral and read
+   by nothing but the redactor, `bundles/` is the only thing the operator ever
+   fetches. This is the control that matters; the rest are nets under it, and it
+   needs no process split — see the note below.
 2. **Allowlist everywhere, blocklist nowhere.** Attributes, element types and
    URL parts are all opt-in. A blocklist would have to know that
    `data-account-email` exists before it could drop it.
@@ -124,6 +125,17 @@ Four structural controls, in the order they act:
    "safe to publish" are not compatible states, and if a fixture cannot be cut
    down to something readable, that is the signal to use the private-repository
    fallback rather than to skim it.
+
+**This does not need the browser split out of the server.**
+[`deployment.md` §8](deployment.md) proposes that split, and an earlier draft of
+this section leaned on it — wrongly. The split addresses a different threat (a
+page escaping Chromium's sandbox landing next to the OAuth secret and the live
+session), and it buys almost nothing here: the redactor and the bundle builder
+would sit on the *same* side of the socket as the raw trace either way, and the
+path a leak actually travels — bundle, SSH fetch, commit, push — is identical
+with or without it. What keeps the raw capture out of that path is the directory
+discipline above, which one process does just as well as two. §8 stands on its
+own merits and is **not a prerequisite** for any of this.
 
 Two properties worth naming because they are the reason this is tractable:
 
@@ -231,12 +243,11 @@ rejects a deliberately out-of-surface commit on a test heal branch.
   always-scrubbed list, and the text-node subtree rule — all as written in the
   design, composed with `redaction.build_redactor(settings)` for the operator's
   own credentials.
-- **Where this runs matters.** [`deployment.md` §8](deployment.md) proposes
-  splitting the browser out of the server process; the raw trace is precisely
-  the artefact that argues for it. Capture and redaction belong on the browser's
-  side of that split, so the server only ever sees a redacted bundle. If the
-  split has not happened by the time this is built, note it as debt rather than
-  quietly putting the raw trace in the server's hands.
+- **Capture, redact and delete in one operation**, with the raw trace under
+  `PrivateTmp` and only the finished bundle written to durable storage. If the
+  browser is later split out of the server ([`deployment.md`
+  §8](deployment.md)), this whole step travels with it unchanged — but it does
+  not wait for that.
 - **The DOM snapshot must be self-contained.** The healing session runs with no
   network, so a snapshot that references external stylesheets renders as
   unstyled markup there — and an unstyled render is useless as review evidence

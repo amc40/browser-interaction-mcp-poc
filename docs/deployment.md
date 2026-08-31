@@ -131,6 +131,16 @@ and `SystemCallFilter` (same). **The browser's requirements set the sandbox
 floor for the server as well**, which is the clearest statement of the problem:
 one process is as weak as the weakest thing in it.
 
+**Scope, so this is not over-sold.** What the split addresses is a page
+escaping Chromium's own sandbox and landing next to the OAuth client secret,
+the deploy checkout and the server's network position. It does *not* do much
+for the risk of failure evidence carrying a secret out to a public repository —
+that leak travels through the bundle, the operator's fetch and a commit, and is
+governed by redacting at capture time and never durably storing the raw trace,
+which one process manages as well as two. Treat this section as defence in
+depth against a browser exploit, not as a prerequisite for
+[`self-healing-plan.md`](self-healing-plan.md).
+
 The proportionate fix is a second unit, not a container:
 
 - A long-lived `browser-worker` running as its own user, talking to the server
