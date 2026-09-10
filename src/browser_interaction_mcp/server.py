@@ -5,13 +5,17 @@ from __future__ import annotations
 import logging
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
+from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware.authorization import AuthMiddleware
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 
 from browser_interaction_mcp.auth import build_auth_provider, github_user_id_is
-from browser_interaction_mcp.login_oauth import BrowserGithubAuth
+from browser_interaction_mcp.login_oauth import (
+    BrowserGithubAuth,
+    login_session_middleware,
+)
 from browser_interaction_mcp.login_routes import register_login_routes
 from browser_interaction_mcp.middleware import (
     SecretRedactionMiddleware,
@@ -21,6 +25,12 @@ from browser_interaction_mcp.redaction import build_redactor
 from browser_interaction_mcp.sainsburys_login_flow import SainsburysLoginFlow
 from browser_interaction_mcp.settings import Settings
 from browser_interaction_mcp.tools import register_tools
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pydantic import SecretStr
+    from starlette.middleware import Middleware
 
 SERVER_NAME = "browser-interaction-mcp"
 
@@ -94,21 +104,57 @@ def build_server(settings: Settings | None = None) -> FastMCP:
     return mcp
 
 
-def _maybe_register_login_page(mcp: FastMCP, settings: Settings) -> None:
-    """Add the out-of-band Sainsbury's login page when it can be served.
+def _login_page_settings(settings: Settings) -> tuple[SecretStr, Path] | None:
+    """Return the settings the login page needs, or ``None`` if it cannot run.
 
     It needs the http transport (for the GitHub OAuth app credentials and a
     public URL) and both Sainsbury's settings. On stdio, or before those are
-    configured, there is nothing to serve.
+    configured, there is nothing to serve. Returning the values rather than a
+    bool keeps this the single place that decides, while still narrowing the
+    optional settings for the caller that uses them.
+
+    Args:
+        settings: Runtime configuration.
+
+    Returns:
+        The Sainsbury's username and storage-state path, or ``None``.
     """
     if (
         settings.transport != "http"
         or settings.sainsburys_username is None
         or settings.sainsburys_storage_state_path is None
     ):
+        return None
+    return settings.sainsburys_username, settings.sainsburys_storage_state_path
+
+
+def http_middleware(settings: Settings) -> list[Middleware]:
+    """Return the ASGI middleware the http transport needs.
+
+    Separate from ``build_server`` because starlette middleware belongs to the
+    ASGI app, which FastMCP builds at ``run`` time rather than at construction
+    time.
+
+    Args:
+        settings: Runtime configuration.
+
+    Returns:
+        The login page's session middleware, or nothing when there is no login
+        page to serve.
+    """
+    if _login_page_settings(settings) is None:
+        return []
+    return [login_session_middleware(settings)]
+
+
+def _maybe_register_login_page(mcp: FastMCP, settings: Settings) -> None:
+    """Add the out-of-band Sainsbury's login page when it can be served."""
+    configured = _login_page_settings(settings)
+    if configured is None:
         return
+    username, storage_state_path = configured
     flow = SainsburysLoginFlow(
-        username=settings.sainsburys_username.get_secret_value(),
-        storage_state_path=settings.sainsburys_storage_state_path,
+        username=username.get_secret_value(),
+        storage_state_path=storage_state_path,
     )
     register_login_routes(mcp, flow, BrowserGithubAuth(settings))
