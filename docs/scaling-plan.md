@@ -38,7 +38,7 @@ are one-of-a-kind only because there has only ever been one site.
 | --- | --- | --- |
 | `server.py`, `auth.py`, `middleware.py`, `redaction.py`, `settings.py`, `__main__.py` | **No** — none of it mentions Sainsbury's | ~700 lines that every future app needs verbatim. `redaction.build_redactor` walks `Settings` for `SecretStr` fields, so a site's own settings must subclass a core `Settings` to stay covered |
 | `browser.py` | **No** | Xvfb lifecycle, headed/headless choice, `storage_state` seeding, consent-cookie injection. Entirely generic already |
-| `login_routes.py`, `login_oauth.py`, `sainsburys_login_flow.py`, `sainsburys_login_worker.py` | **Mostly no** | ~670 lines of state machine, OTP parking, subprocess supervision and GitHub-gated browser page. The site-specific part is the handful of form steps the worker performs |
+| `login_routes.py`, `login_oauth.py`, `sainsburys_login_flow.py`, `sainsburys_login_worker.py` | **Mostly no** | ~930 lines of state machine, OTP parking, subprocess supervision and GitHub-gated browser page — the handshake itself is Authlib's since #42, and the session is starlette's. The site-specific part is the handful of form steps the worker performs |
 | `deploy_webhook.py` | **No** | HMAC verification, size cap, unit trigger. The unit name already comes from the environment |
 | `sainsburys.py` | **Partly** | 815 lines. The locators, URLs, login steps and "am I logged in" probe are Sainsbury's. `_wait_for_page_to_settle`, `_readable_matches`' bounded-per-item read, the ellipsis-prefix name match and `_authenticated_page`'s shape are patterns, not facts about Sainsbury's — and [`site-automation-gotchas.md`](site-automation-gotchas.md) already says so |
 | `tools.py` | **Yes**, by design | The approval surface. One function per approved action |
@@ -310,8 +310,9 @@ optionally enable **wildcard matching** across subdomains and subpaths.
 Each app needs two callbacks — the MCP endpoint's `/auth/callback` and the login
 page's — so ten URIs would cover five apps with explicit, auditable URLs, and
 adding a site would mean editing one app's URI list rather than registering a new
-app. **D10 removes both callbacks instead**, so this budget stops being a limit
-on fleet size at all; read that decision before acting on this one.
+app. **D10 removes both callbacks with one setting instead** — wildcard matching
+covers additional paths as well as subdomains — so this budget stops being a
+limit on fleet size at all. Read that decision before acting on this one.
 
 Note the changelog's own warning while doing it: **an app with only one redirect
 URI has wildcard matching on by default** — legacy behaviour, now visible and
@@ -385,8 +386,8 @@ kernel picks will not be the one that caused it.
 
 With one app, a stale selector is noticed the next time it is used. With five,
 some app is always quietly broken. A per-app `browser-mcp-smoke@<slug>.timer`
-runs that app's cheapest read-only action nightly, staggered, on the Pi — the only
-place with a real session and a real route to the site. Its failure is the trigger
+runs that app's cheapest read-only action nightly, staggered, on whichever host
+owns it — the only place with a real session and a real route to the site. Its failure is the trigger
 that feeds self-healing, which turns the heal loop from "wait until a human trips
 over it" into "notice within a day".
 
@@ -455,114 +456,105 @@ requests across however many hosts, instead of one.
 
 ### D10 — Commonising the login, so a new site needs no new redirect
 
-Two GitHub redirects per app: the MCP endpoint's `/auth/callback` and the browser
-login page's. Ten URIs on one OAuth app therefore stretches to five sites, and
-adding a site means editing that app. Both can go — by different means, because
-the two flows have different *clients*.
+Two GitHub redirects per app: `/auth/callback` for the MCP endpoint, and the
+login page's own. Ten URIs on one OAuth app would therefore stretch to five
+sites, and adding a site would mean editing that app.
 
-| Flow | Client | Why it can't share the other's gate | Fix | Redirects removed |
-| --- | --- | --- | --- | --- |
-| The `/login` page | The operator's browser | It is interactive, so an edge gate works — and it is the flow that currently hand-rolls GitHub OAuth | **Cloudflare Access** in front of the path | one per app |
-| The `/mcp` endpoint | claude.ai's connector | It performs the OAuth flow itself and cannot send Access's service-token headers, so Access in front of it breaks the connector | **Wildcard matching** on one registered redirect | one per app |
+**One setting removes both, for every app, permanently.** D4's wildcard matching
+covers "any URL that matches a subdomain **or additional path** off of the
+redirect URI". So registering `https://mcp.example.com/` once with wildcard
+matching enabled covers `sainsburys.mcp.example.com/auth/callback` *and*
+`sainsburys.mcp.example.com/sainsburys-login/auth/callback` alike — both flows,
+every app, no per-site registration. The ten-URI budget stops being a limit on
+fleet size.
 
-**The login page: put it behind Cloudflare Access, and delete the OAuth code.**
+An earlier draft of this section reached the same place by a longer road: it put
+the login page behind Cloudflare Access in order to delete one of the two
+callbacks, and counted that as half the answer. It is not needed for the redirect
+count. Whether it is wanted for its own sake is a separate question, below.
 
-- One Access application, hostname `*.mcp.example.com`, path `/login*`. Access
-  supports [wildcard subdomains and path-scoped applications](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths),
-  matched most-specific-first, so this is configured once and covers every app
-  that will ever exist. Everything else on the hostname is simply not an Access
-  application, so `/mcp` and `/deploy-webhook` are never intercepted.
-- **Standardise the path**: today it is `/sainsburys-login`, per site. In core it
-  becomes `/login` for every app, which is exactly what makes one wildcard rule
-  sufficient. Cheap now, awkward later.
-- The app **verifies** the `Cf-Access-Jwt-Assertion` header rather than trusting
-  its presence — signature against the team's JWKS, `aud` against the Access
-  application's AUD tag, issuer, expiry, identity. One Access application means
-  one fleet-wide AUD, so one config value.
-- This **deletes `login_oauth.py`**. Be precise about what that file is, because
-  only one of the server's two auth paths is bespoke:
+**The residual risk, stated rather than glossed.** A wildcard-delivered
+authorisation code is only useful together with the client secret, which never
+leaves the hosts, and the app requests no scopes and still checks `sub` against
+one numeric ID — two compromises, not one. What it does rest on is controlling
+every name under the zone: with wildcard DNS pointing at your own tunnels and
+ingress returning 404 for unmatched hostnames that holds, but do not point that
+wildcard anywhere else, and do not leave a decommissioned subdomain dangling.
 
-  | Path | Client | Who implements the flow |
-  | --- | --- | --- |
-  | `/mcp` | claude.ai's connector | **FastMCP's `GitHubProvider`** — a library. `auth.py` contributes one line of policy, `sub == github_user_id`, and nothing else |
-  | `/…-login` | The operator's browser | **`BrowserGithubAuth`, written here** — builds the authorize URL, keeps `state` in an in-process dict, POSTs the code to GitHub's token endpoint, calls `/user`, and mints its own HMAC-SHA256 session cookie |
+Note also D4's warning while enabling it: **an app with only one redirect URI has
+wildcard matching on by default** — legacy behaviour, now visible and
+controllable. The existing app almost certainly has it enabled already.
 
-  Two exist because they are different protocols for different clients: MCP
-  carries bearer tokens in headers, and a person in a browser needs cookies and
-  redirects. `GitHubProvider` does the first and not the second, so the second
-  was written by hand — about 200 lines of security-relevant code.
+#### Should the login gate be Cloudflare's rather than ours?
 
-  **It is competently written**, and that is worth saying before arguing to
-  delete it: `state` is single-use with a TTL and a sweep, the signature
-  comparison is `hmac.compare_digest`, the cookie is `httponly` +
-  `samesite=strict` + path-scoped with `secure` keyed off the https base URL, no
-  scopes are requested, and identity is checked on the numeric `id` rather than
-  the login.
+A separate question, and the answer moved while this was being written. `main`
+merged [#42](https://github.com/amc40/browser-interaction-mcp-poc/pull/42),
+replacing the hand-rolled browser OAuth gate with Authlib. That changes the case
+materially, and an earlier draft of this section is now wrong about it:
 
-  **The argument for deleting it is not that it is bad, it is what D4 did to
-  it.** The cookie signing key is derived from the GitHub client secret:
+| The earlier draft said | After #42 |
+| --- | --- |
+| The gate hand-rolls the OAuth handshake | **Authlib** runs the handshake and **starlette's `SessionMiddleware`** signs the session. What is left in the module is policy: which account is allowed, and what the page does about the ones that are not |
+| The CSRF `state` sits in a process-global dict | Session-backed — the shape Authlib's own advisories (CVE-2025-68158, CVE-2026-41425) name as the safe one. The module's docstring records that the old dict *was* that bug, and that only the single-account check stopped it mattering |
+| ~200 lines of security-relevant code to maintain | 260 lines, much of it a `ScopedSessionMiddleware` that keeps `scope["session"]` from existing at all on an MCP request. The security-critical plumbing is a dependency now |
 
-  ```python
-  self._signing_key = hmac.new(
-      self._client_secret.encode(), b"sainsburys-login-session", hashlib.sha256
-  ).digest()
-  ```
+So **"it is hand-rolled" is no longer an argument**, and the code is better than
+the thing an earlier draft proposed replacing it with. Two threads survive:
 
-  When each site had its own OAuth app, that coupling was contained — leak app
-  A's secret, forge app A's login cookies. **D4 made the client secret
-  fleet-wide**, so one leak now forges login-page sessions for *every app*, and
-  the login page is the thing that accepts the site password. That consequence
-  did not exist when this code was written; it was created by a later decision,
-  which is exactly the kind of thing that goes unnoticed. Under Access the gate
-  is a JWT signed by Cloudflare's keys and the client secret is not involved in
-  it at all, so the coupling disappears rather than being documented.
-- Verify wildcard *application* support on the account's plan before relying on
-  it. If it is not available, one Access application per hostname is still
-  configuration rather than code, and still removes the GitHub redirect.
+- **The session key is still the GitHub client secret**, now deliberately: the
+  docstring's reasoning is that rotating the OAuth secret then invalidates every
+  open login session, which is the behaviour you want from a rotation. Sound in
+  isolation — but weigh it against D4, which made that secret **fleet-wide**, so
+  a single leak forges login sessions for *every* app, on the one endpoint that
+  accepts the site password. **And the benefit is bounded at fifteen minutes**:
+  `_SESSION_TTL_SECONDS = 900`, so an un-rotated session dies of old age almost
+  immediately regardless. That is a very small benefit for a cross-app forgery
+  path.
 
-**The MCP endpoint: wildcard matching on a single registered redirect.**
+  **The fix is small and needs no Access.** Give the session its own
+  `BROWSER_MCP_LOGIN_SESSION_SECRET`, generated per app by Ansible exactly like
+  the webhook secret in D5. Rotation still works — rotate that instead — and app
+  A's cookies stop being forgeable by anything that learned app B's secret.
+  **Recommended on its own merits, independent of the rest of this section.**
 
-- Register `https://mcp.example.com/` once with wildcard matching enabled, and
-  every `<slug>.mcp.example.com/auth/callback` matches it. Zero per-app
-  registration, and D4's ten-URI budget stops being a limit on fleet size.
-- The residual risk is bounded, and worth stating rather than glossing: a
-  wildcard-delivered authorisation code is only useful together with the client
-  secret, which never leaves the hosts, and the app requests no scopes and still
-  checks `sub` against one numeric ID. It takes two compromises, not one.
-- What it does rest on is controlling every name under the zone. With wildcard
-  DNS pointing at your own tunnels and ingress returning 404 for unmatched
-  hostnames, that holds — but do not point that wildcard anywhere else, and do
-  not leave a decommissioned subdomain dangling.
+- **A stronger gate on the page that accepts a password.** The README's own
+  concern — "the GitHub session cookie is the whole gate on a public endpoint
+  that accepts a password" — is untouched by #42, which changed how the cookie is
+  produced, not what stands behind it. Access can put MFA and device posture in
+  front. That is now the only reason left to want it.
 
-**Result: per-app auth work goes to zero**, and the "+2 callback URLs" step
-leaves the ceremony track entirely.
+**Recommendation: keep the Authlib gate, fix the key derivation, and treat Access
+as a hardening option rather than part of this plan.** Adopt it if a second
+factor in front of the password form is wanted — not for the redirects, which are
+already solved, and not for code quality, which #42 addressed.
+
+**Worth doing regardless: standardise the login path.** It is `/sainsburys-login`
+today — site-named, in a module core will own. `/login` for every app is right
+whether or not Access ever appears, and it is what would make a single Access
+rule sufficient if it does.
 
 #### The alternative, if the client secret ever needs to leave the app processes
 
 A **fleet auth host**: one small service holding the GitHub client secret and
 acting as the fleet's identity provider, with each app's FastMCP pointed at it
-rather than at github.com. Per-app redirect registration then moves out of
-GitHub's web UI and into a config file Ansible generates from `apps.yml` —
-automatic rather than manual.
+rather than at github.com.
 
-The real argument for it is not convenience. Under D4 the client secret sits in
-the environment of **every process that drives a hostile web page**. An auth host
-never renders one, so it can carry the systemd hardening the app units must omit
-for Chromium's sake — `MemoryDenyWriteExecute`, `RestrictNamespaces`,
-`SystemCallFilter=@system-service`. Sign its assertions with Ed25519 and each app
-holds only a public key, so compromising one app mints nothing for another.
+The argument for it is that under D4 the client secret sits in the environment of
+**every process that drives a hostile web page**. An auth host never renders one,
+so it can carry the systemd hardening the app units must omit for Chromium's sake
+— `MemoryDenyWriteExecute`, `RestrictNamespaces`, `SystemCallFilter=@system-service`.
 
-Against it: a new service to write and hold to the 100% gate; hand-rolled
-identity code is precisely the wrong thing to hand-roll, so it means adopting
-something like Authelia rather than writing one; and it couples every app's
-authentication to one host's availability, which D9 has just finished
-distributing. **Not now** — named so that it stays a decision rather than
-becoming a discovery.
+Against it: a new service to write and hold to the 100% gate; identity code is
+precisely the wrong thing to hand-roll, so it means adopting something like
+Authelia; and it couples every app's authentication to one host's availability,
+which D9 has just finished distributing. **Not now** — and the per-app session
+secret above removes the sharpest reason anyone would reach for it. Named so it
+stays a decision rather than becoming a discovery.
 
 #### An asterisk worth writing down while we are here
 
-TLS terminates at Cloudflare's edge, so **the site password typed into `/login`
-is visible to Cloudflare in the request body**. That is already true of this
+TLS terminates at Cloudflare's edge, so **the site password typed into the login
+page is visible to Cloudflare in the request body**. That is already true of this
 deployment and none of the above changes it — but it belongs in the record,
 because "the server never holds a password" has always had this second asterisk
 beside it, alongside the one the README already names.
@@ -786,7 +778,7 @@ first one and does nothing at all to the second, which is the critical path.
 | **Removed** | Repo, CI config, gates, package skeleton | `bmcp new-site` writes a directory under `packages/`. There is no repository to create, no CI to configure and no gate config to copy — the workspace already has one of each |
 | **Removed** | Accounts, units, env files, webhook, tunnel ingress | Six lines in `apps.yml` and one playbook run |
 | **Removed** | The DNS record | A wildcard `*.mcp` record means there is no per-site DNS step at all |
-| **Removed** | Anything to do with authentication | D10: the `/login` page sits behind one wildcard Cloudflare Access application, and the MCP endpoint's redirect uses wildcard matching on a single registered URI. Neither needs touching when a site is added |
+| **Removed** | Anything to do with authentication | D10: one registered redirect URI with wildcard matching covers both of an app's callbacks, for every app. Nothing to touch when a site is added |
 | **One-off** | The connector in claude.ai | A UI action, once per site, and the one step with no automatable path at all. The vault barely features any more: the client id and secret are fleet-wide, the webhook secret is generated by Ansible rather than typed, so all that is left per site is the account username — and only for sites that log in |
 | **Irreducible** | Does the site block headless Chromium? | Sainsbury's and Tesco both run Akamai Bot Manager, which blocks *headless* specifically, regardless of network origin or user agent. You find out by trying. It decides `headed: true`, which decides ~400MB, which decides whether the Pi has room for app N+1 at all |
 | **Reduced** | The consent banner's real shape | The market is concentrated — OneTrust, Cookiebot, Didomi, Sourcepoint, Usercentrics, TrustArc — and many implement IAB TCF, which exposes a standard `window.__tcfapi`. So core carries a **CMP registry**: per CMP, a detection fingerprint, the cookies to pre-seed for reject-all, and the fallback selectors. A `bmcp probe <url>` command opens the page and reports which one a site uses, turning research into confirmation. What stays per-site is the *values* — OneTrust's `OptanonConsent` encodes group ids configured per site, and the registrable domain differs — read once from the site's own cookie-declaration table |
