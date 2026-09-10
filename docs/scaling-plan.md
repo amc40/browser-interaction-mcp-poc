@@ -850,9 +850,15 @@ than a file copy.
   isolation covers files and processes; app A's compromised browser can still
   make outbound requests anywhere. See D3 for the two paths to fixing that when it
   matters.
-- **It does not automate the two manual steps per site**: registering a GitHub
-  OAuth app, and doing the first real login to capture a session. Both need a
-  human, and both are on the template's checklist rather than hidden.
+- **It does not automate the two manual steps per site**: adding the connector in
+  claude.ai, and doing the first real login to capture a session (which is also
+  the only reason a site needs a vault entry — its account username). Both need a
+  human, and both are on the scaffold's checklist rather than hidden.
+
+  **Registering the OAuth app is not one of them.** An earlier draft listed it
+  here; D10 removed it. It happens **once, ever, for the fleet** — one OAuth app
+  with wildcard matching enabled, plus one Cloudflare Access application — and
+  neither is touched again when a site is added.
 - **It does not add a deploy gate.** The self-healing plan's decision — protection
   plus a substantive review, not an approval click — stands, and stands per app.
 
