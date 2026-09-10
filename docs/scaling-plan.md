@@ -479,11 +479,43 @@ the two flows have different *clients*.
   its presence — signature against the team's JWKS, `aud` against the Access
   application's AUD tag, issuer, expiry, identity. One Access application means
   one fleet-wide AUD, so one config value.
-- This **deletes `login_oauth.py`** — the code the README already flags as having
-  skipped the 100% coverage gate and never had a `/security-review`. Replacing a
-  hand-rolled OAuth-and-cookie gate with a verified JWT from the edge that
-  already terminates the TLS is a strict improvement, and it closes an open item
-  instead of adding one.
+- This **deletes `login_oauth.py`**. Be precise about what that file is, because
+  only one of the server's two auth paths is bespoke:
+
+  | Path | Client | Who implements the flow |
+  | --- | --- | --- |
+  | `/mcp` | claude.ai's connector | **FastMCP's `GitHubProvider`** — a library. `auth.py` contributes one line of policy, `sub == github_user_id`, and nothing else |
+  | `/…-login` | The operator's browser | **`BrowserGithubAuth`, written here** — builds the authorize URL, keeps `state` in an in-process dict, POSTs the code to GitHub's token endpoint, calls `/user`, and mints its own HMAC-SHA256 session cookie |
+
+  Two exist because they are different protocols for different clients: MCP
+  carries bearer tokens in headers, and a person in a browser needs cookies and
+  redirects. `GitHubProvider` does the first and not the second, so the second
+  was written by hand — about 200 lines of security-relevant code.
+
+  **It is competently written**, and that is worth saying before arguing to
+  delete it: `state` is single-use with a TTL and a sweep, the signature
+  comparison is `hmac.compare_digest`, the cookie is `httponly` +
+  `samesite=strict` + path-scoped with `secure` keyed off the https base URL, no
+  scopes are requested, and identity is checked on the numeric `id` rather than
+  the login.
+
+  **The argument for deleting it is not that it is bad, it is what D4 did to
+  it.** The cookie signing key is derived from the GitHub client secret:
+
+  ```python
+  self._signing_key = hmac.new(
+      self._client_secret.encode(), b"sainsburys-login-session", hashlib.sha256
+  ).digest()
+  ```
+
+  When each site had its own OAuth app, that coupling was contained — leak app
+  A's secret, forge app A's login cookies. **D4 made the client secret
+  fleet-wide**, so one leak now forges login-page sessions for *every app*, and
+  the login page is the thing that accepts the site password. That consequence
+  did not exist when this code was written; it was created by a later decision,
+  which is exactly the kind of thing that goes unnoticed. Under Access the gate
+  is a JWT signed by Cloudflare's keys and the client secret is not involved in
+  it at all, so the coupling disappears rather than being documented.
 - Verify wildcard *application* support on the account's plan before relying on
   it. If it is not available, one Access application per hostname is still
   configuration rather than code, and still removes the GitHub redirect.
