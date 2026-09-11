@@ -306,7 +306,7 @@ slow ones on push.
 | Workflows | `zizmor` | Static analysis of the GitHub Actions workflows themselves |
 | Code scanning | CodeQL | `security-extended` query suite, on PRs and weekly |
 | Packaging | `uv build` + `twine check` | The distribution builds and its metadata is valid |
-| Updates | Dependabot | Weekly PRs for dependencies and actions |
+| Updates | Dependabot | Daily PRs for dependencies, over the same set `pip-audit` checks and timed just ahead of it; weekly for actions |
 
 Adjusting a gate means editing `[tool.*]` in `pyproject.toml` — the same
 configuration drives local runs, pre-commit and CI, so they cannot disagree.
