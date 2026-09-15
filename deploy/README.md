@@ -146,15 +146,19 @@ is viable.
 
 ## Roles
 
+In `site.yml`'s order, which is load-bearing — see that file's own comment on
+why `deploy_account` and `deploy_webhook` sit where they do.
+
 | Role | Responsibility |
 | --- | --- |
 | `base` | apt upgrade, `unattended-upgrades`, key-only SSH, timezone, zram, and the service account |
 | `storage` | Phase 1: SD-card state paths. Phase 2: mount the SSD, migrate onto it |
+| `deploy_account` | The `deploy` account that owns the checkout, and its sudoers rules. Before `uv` and `browser`, which chown their outputs to it |
 | `uv` | Install `uv`, check out the application, `uv sync --frozen --no-dev` |
-| `browser` | An explicit apt library list, then `playwright install chromium` |
+| `browser` | An explicit apt library list, Xvfb for headed Chromium, then `playwright install chromium` |
+| `deploy_webhook` | The two units behind the fast deploy path below. After `uv`, since a unit's `ExecStart` lives inside the checkout |
 | `app` | systemd unit, `EnvironmentFile`, the service it runs as |
 | `tunnel` | `cloudflared` from Cloudflare's apt repository, named-tunnel credentials, its own unit |
-| `deploy_webhook` | The `deploy` account that owns the checkout, its sudoers rules, and the two units behind the fast deploy path below |
 
 Two departures from the table in `docs/pi-deployment.md`, both because of
 ordering: the service account is created in `base` rather than `app`, since
@@ -250,7 +254,13 @@ naming them here is cheaper than rediscovering them later:
   `EnvironmentFile` until the code can read one.
 - **§7, encryption at rest.** The profile lives on an unencrypted ext4 SSD.
   Permissions are not encryption; anyone holding the disk holds the sessions.
-- **§8, audit logging.** Nothing records which tool ran, when, or on whose
+- **§8, isolating the browser from the server.** Playwright starts inside the
+  FastMCP process, so the process parsing untrusted page content is the one
+  holding the OAuth client secret. The fix is a second unit with its own
+  account, not a playbook setting — and until it exists, the app unit cannot
+  set `MemoryDenyWriteExecute`, `RestrictNamespaces` or `SystemCallFilter`,
+  because Chromium needs all three.
+- **§9, audit logging.** Nothing records which tool ran, when, or on whose
   authority.
 - **The `uv` installer is fetched over HTTPS without a checksum.** Pinning a
   known digest per `uv_version` would close it.

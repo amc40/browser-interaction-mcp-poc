@@ -239,6 +239,10 @@ fact that shell access on the host bypasses all of this.
 | `src/browser_interaction_mcp/tools.py` | Every exposed tool. New browser actions go here |
 | `src/browser_interaction_mcp/browser.py` | Shared browser/page setup for every action, headless or headed |
 | `src/browser_interaction_mcp/sainsburys.py` | Browser actions against Sainsbury's public groceries site |
+| `src/browser_interaction_mcp/login_routes.py` | The `/sainsburys-login` pages: the out-of-band way to capture a session |
+| `src/browser_interaction_mcp/login_oauth.py` | The GitHub sign-in gate in front of those pages — Authlib's handshake, starlette's session |
+| `src/browser_interaction_mcp/sainsburys_login_flow.py` | The login state machine behind them: one attempt at a time, parked on the MFA step |
+| `src/browser_interaction_mcp/sainsburys_login_worker.py` | The subprocess that drives the real login, so a hung Chromium can be killed |
 | `src/browser_interaction_mcp/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy on the Pi — not part of the running server |
 | `src/browser_interaction_mcp/auth.py` | Who may use the server: the OAuth provider and the login check |
 | `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
@@ -250,6 +254,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
+| `docs/self-healing-plan.md` | The staged plan for building it, and where the infrastructure has overtaken that design |
 | `docs/scaling-plan.md` | Architecture and staged plan for many sites: shared library, repo per site, per-app isolation on the Pi |
 | `docs/site-automation-gotchas.md` | Failure patterns found driving the real site, for when this generalises |
 | `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
