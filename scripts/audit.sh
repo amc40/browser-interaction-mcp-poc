@@ -5,6 +5,11 @@
 # pip-audit reads a requirements file rather than uv.lock, so export the lock to
 # that format first. The export is a faithful rendering of uv.lock, so this
 # audits exactly what `uv sync` would install.
+#
+# --no-emit-workspace, not --no-emit-project: in a workspace every member is a
+# package in its own right, and each would otherwise be exported as an editable
+# local requirement that pip-audit rejects for having no hash. There is nothing
+# to audit in them anyway - they are this repository.
 set -euo pipefail
 
 requirements="$(mktemp)"
@@ -14,7 +19,7 @@ uv export \
 	--quiet \
 	--frozen \
 	--all-groups \
-	--no-emit-project \
+	--no-emit-workspace \
 	--format requirements-txt \
 	--output-file "${requirements}"
 

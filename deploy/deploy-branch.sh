@@ -6,7 +6,7 @@
 #   sudo -u deploy /opt/browser-interaction-mcp/deploy/deploy-branch.sh my-branch
 #
 # There is deliberately no other way to reach this. deploy_webhook.py
-# (src/browser_interaction_mcp/, triggered by CI once it's green on `main`)
+# (packages/, triggered by CI once it's green on `main`)
 # and this script solve different problems and are not meant to converge:
 # the webhook only ever takes a commit that has already passed CI on `main`,
 # gated by an HMAC signature GitHub Actions computes - nobody decides that by

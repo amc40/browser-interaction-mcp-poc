@@ -15,7 +15,12 @@ WorkingDirectory={{ mcp_checkout_dir }}
 EnvironmentFile={{ deploy_webhook_environment_file }}
 # Run directly with the system interpreter, not the venv - see the module
 # docstring for why it must survive a uv sync that a bad commit broke.
-ExecStart=/usr/bin/python3 {{ mcp_checkout_dir }}/src/browser_interaction_mcp/deploy_webhook.py
+#
+# The path moved when the repository became a uv workspace. A running receiver
+# already has the module loaded, so the deploy that carries this change still
+# works; the unit file is only re-read on restart, which is why this role has
+# to be re-run rather than left to the code-only deploy path.
+ExecStart=/usr/bin/python3 {{ mcp_checkout_dir }}/packages/core/src/browser_mcp_core/deploy_webhook.py
 Restart=on-failure
 RestartSec=5
 

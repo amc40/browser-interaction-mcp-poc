@@ -235,7 +235,7 @@ Re-running the whole playbook is the right tool for infra changes — new apt
 packages, systemd unit changes, tunnel config — but heavy for "one Python
 file changed, ship it," and it needs someone's laptop, the vault password and
 the become password every time. `deploy_webhook.py`
-(`src/browser_interaction_mcp/`) is a small, dependency-free receiver the
+(`packages/core/src/browser_mcp_core/`) is a small, dependency-free receiver the
 `deploy_webhook` role installs as its own long-lived systemd service: GitHub
 Actions HMAC-signs a request naming the commit that just passed CI on `main`
 and POSTs it to `https://<host>/deploy-webhook` — a second, path-scoped

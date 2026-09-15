@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Capture an authenticated Sainsbury's session for later, logged-in actions.
 
-For `browser_interaction_mcp.sainsburys.add_to_basket` and anything else that
+For `browser_mcp_sainsburys.site.add_to_basket` and anything else that
 needs to act as a signed-in Sainsbury's account. Thin CLI wrapper around
-`sainsburys.refresh_session` - the same function the `/sainsburys-login`
-browser page drives, for when there's no way to run a script like this one at
-all (e.g. no routine shell access to wherever the server is deployed). See that
-function's docstring, and `sainsburys.py`'s module docstring, for what it
-means that this project's one login flow handles a password.
+`browser_mcp_core.login_steps.refresh_session` driving this site's
+`SainsburysLoginSteps` - the same pair the `/sainsburys-login` browser page
+drives, for when there's no way to run a script like this one at all (e.g. no
+routine shell access to wherever the server is deployed). See that function's
+docstring, and `site.py`'s module docstring, for what it means that this
+project's one login flow handles a password.
 
 **Run this locally, by hand, with your own Sainsbury's credentials - never
 inside the MCP server, never in an automated environment, and never in a
 session that isn't yours.** The password is read with `getpass` (never
 echoed, never in shell history), and typed by this script into a real,
 visible Chromium window (headed, because Sainsbury's blocks headless Chromium
-outright - see `browser.py` and `sainsburys.py`'s docstrings). If Sainsbury's
+outright - see `browser.py` and `site.py`'s docstrings). If Sainsbury's
 asks for a verification code - it doesn't always, seemingly depending on
 whether the device/network is already trusted - you're prompted for that too.
 Neither value is written anywhere by this script; only the resulting session
@@ -45,7 +46,8 @@ import getpass
 import sys
 from pathlib import Path
 
-from browser_interaction_mcp.sainsburys import refresh_session
+from browser_mcp_core.login_steps import refresh_session
+from browser_mcp_sainsburys.site import SainsburysLoginSteps
 
 DEFAULT_OUTPUT = Path("sainsburys_storage_state.json")
 
@@ -67,6 +69,7 @@ def main(argv: list[str]) -> int:
 
     try:
         refresh_session(
+            SainsburysLoginSteps(),
             username,
             password,
             storage_state_path=output,

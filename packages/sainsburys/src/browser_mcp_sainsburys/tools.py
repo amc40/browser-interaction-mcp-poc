@@ -1,0 +1,213 @@
+"""The tools exposed over MCP.
+
+Every browser action this server can perform is written out here, in code, and
+registered explicitly. Nothing accepts a free-form selector, script or URL from
+the caller: a model can only choose *which* pre-approved action runs, never what
+that action does.
+
+Refreshing the Sainsbury's session is deliberately *not* a tool. It needs a
+password, and Claude.ai's MCP client cannot collect one out of band, so it is
+done through a browser page instead - see
+:mod:`browser_mcp_core.login_routes`.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from fastmcp.exceptions import ToolError
+from pydantic import BaseModel, Field
+
+from browser_mcp_core.errors import NotLoggedInError
+from browser_mcp_sainsburys import site
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from fastmcp import FastMCP
+
+    from browser_mcp_sainsburys.settings import SainsburysSettings
+
+
+class ProductsWeLove(BaseModel):
+    """Product names under Sainsbury's groceries homepage "Products we love"."""
+
+    products: list[str] = Field(
+        description='Product names, in the order shown under "Products we love".',
+    )
+
+
+class ProductSearchResult(BaseModel):
+    """One product returned by a Sainsbury's search, unadded."""
+
+    name: str = Field(description="Product name, exactly as shown on its result tile.")
+    id: str = Field(
+        description=(
+            "This result's own id on Sainsbury's site. Prefer passing this as "
+            "`sainsburys_add_to_basket`'s `product_id` over retyping `name` - it "
+            "names this exact product, so it isn't affected by `name` getting "
+            "truncated or altered wherever you're shown it before you pass it back."
+        ),
+    )
+    image_url: str | None = Field(
+        description=(
+            "URL of the product's image, if one could be read from its result tile."
+        ),
+    )
+
+
+class ProductSearchResults(BaseModel):
+    """The top matches for a Sainsbury's search, for a caller to choose from."""
+
+    results: list[ProductSearchResult] = Field(
+        description="Matches, in the order Sainsbury's results page lists them.",
+    )
+
+
+class AddedToBasket(BaseModel):
+    """Confirmation that a product was added to the Sainsbury's basket."""
+
+    product: str = Field(description="Name of the product added, as shown on its page.")
+
+
+def _guard_session[T](action: Callable[[], T]) -> T:
+    """Run a browser action, surfacing a missing or stale session usefully.
+
+    `NotLoggedInError` is a plain `RuntimeError`, so a server with
+    error masking on - every deployed one - would collapse its message to a
+    bare "internal error". Re-raising as `ToolError` keeps the message (which
+    tells the caller to get the operator to re-authenticate at
+    `/sainsburys-login`) intact through the mask.
+    """
+    try:
+        return action()
+    except NotLoggedInError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def register_tools(mcp: FastMCP, settings: SainsburysSettings, version: str) -> None:
+    """Register every pre-approved tool on ``mcp``.
+
+    Args:
+        mcp: The server to register the tools on.
+        settings: Runtime configuration.
+        version: Version of the installed package. Unused here - core reports
+            it through ``server_info`` - but part of the signature every site's
+            ``register_tools`` has.
+    """
+    del version
+
+    def _require_storage_state() -> Path:
+        """Return the configured session path, or raise if none is usable."""
+        storage_state_path = settings.sainsburys_storage_state_path
+        if storage_state_path is None or not storage_state_path.is_file():
+            msg = (
+                "No saved Sainsbury's session. Run scripts/sainsburys_login.py "
+                "locally, or visit /sainsburys-login on this server to sign in, "
+                "then point BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH at the file "
+                "it writes."
+            )
+            raise NotLoggedInError(msg)
+        return storage_state_path
+
+    # Add browser actions below, one function per action. Keep each one
+    # deterministic and parameterised only by values you validate here.
+
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+    )
+    def sainsburys_products_we_love() -> ProductsWeLove:
+        """Return the first 5 product names under Sainsbury's "Products we love".
+
+        Reads the public, unauthenticated groceries homepage
+        (site.co.uk/gol-ui/groceries) - no login or credentials involved.
+        """
+        return ProductsWeLove(products=site.products_we_love())
+
+    @mcp.tool(
+        annotations={"readOnlyHint": True, "openWorldHint": True},
+    )
+    def sainsburys_search(
+        query: str = site.DEFAULT_SEARCH_QUERY,
+    ) -> ProductSearchResults:
+        """Search Sainsbury's and return the top 5 matches, without adding any.
+
+        Nothing is added to the basket - call this first to see what a query
+        actually matches, then pass one result to `sainsburys_add_to_basket`:
+        its `id`, if it has one, or otherwise its `name` *exactly*. Present
+        the results to the person as a Markdown list with each `image_url`
+        inlined (`![name](image_url)`) so they can see titles and pictures
+        before choosing, rather than picking on their behalf.
+
+        `query` is only ever typed into Sainsbury's own site search, exactly
+        as a person would - it cannot reach a page, selector or script this
+        server hasn't approved in code.
+
+        Needs an already-authenticated Sainsbury's session - see
+        `sainsburys_add_to_basket`'s docstring for how to capture one.
+        """
+        product_matches = _guard_session(
+            lambda: site.search_products(
+                query, storage_state_path=_require_storage_state()
+            ),
+        )
+        return ProductSearchResults(
+            results=[
+                ProductSearchResult(
+                    name=match.name, id=match.id, image_url=match.image_url
+                )
+                for match in product_matches
+            ],
+        )
+
+    @mcp.tool(
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "openWorldHint": True,
+        },
+    )
+    def sainsburys_add_to_basket(
+        product_name: str, product_id: str | None = None
+    ) -> AddedToBasket:
+        """Search Sainsbury's for a `sainsburys_search` result and add it.
+
+        Not a description, not an index - an index isn't accepted because it
+        can go stale between the two calls (the site can re-rank or re-stock
+        in between). Call `sainsburys_search` first if you don't already
+        have a result to pass in, and identify it one of two ways:
+
+        - `product_id`, the result's own `id` - prefer this. It names that
+          exact product, so it isn't affected by `product_name` getting
+          truncated or otherwise altered wherever it was shown to you
+          before you passed it back.
+        - Otherwise, `product_name` must be the exact name of the result
+          (whitespace aside). If the name you have was itself cut short
+          somewhere and ends in "..." or "…", pass it as-is rather than
+          guessing at the rest - it's matched as a prefix against the real
+          result.
+
+        Either way, the response reports the product's real, full name -
+        not necessarily `product_name` itself.
+
+        `product_name` is only ever typed into Sainsbury's own site search,
+        exactly as a person would - it cannot reach a page, selector or
+        script this server hasn't approved in code.
+
+        Needs an already-authenticated Sainsbury's session. Capture one by
+        running `scripts/sainsburys_login.py` locally, or - on a deployed
+        server - by visiting `<server>/sainsburys-login` in a browser and
+        signing in there. Either way `BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH`
+        has to point at the result. This tool itself never sees a password -
+        it only replays a captured session, and raises if none is set up or
+        the saved one is no longer accepted.
+        """
+        product = _guard_session(
+            lambda: site.add_to_basket(
+                product_name,
+                product_id=product_id,
+                storage_state_path=_require_storage_state(),
+            ),
+        )
+        return AddedToBasket(product=product)

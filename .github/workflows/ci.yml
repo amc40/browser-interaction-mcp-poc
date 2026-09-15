@@ -36,7 +36,11 @@ jobs:
           - name: types
             run: uv run mypy
           - name: dependencies
-            run: uv run deptry src tests
+            # Once per workspace member: deptry reads the declared dependencies
+            # from the pyproject.toml in its working directory.
+            run: |
+              cd packages/core && uv run --project ../.. deptry src tests
+              cd ../sainsburys && uv run --project ../.. deptry src tests
           - name: vulnerabilities
             run: ./scripts/audit.sh
     steps:
@@ -101,9 +105,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-      - name: Build and validate the distribution
+      - name: Build and validate the distributions
+        # --all-packages: the workspace root ships no code of its own, so a
+        # bare `uv build` would have nothing to do and silently pass.
         run: |
-          uv build
+          uv build --all-packages
           uvx twine check --strict dist/*
 
   # Fast path for a code-only change: notify the Pi's webhook receiver

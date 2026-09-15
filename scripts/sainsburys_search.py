@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""CLI wrapper for `browser_interaction_mcp.sainsburys.search_products`.
+"""CLI wrapper for `browser_mcp_sainsburys.site.search_products`.
 
 Run this to validate the search action for real, once a session exists - the
-logic itself lives in `src/browser_interaction_mcp/sainsburys.py`, registered
-as the `sainsburys_search` MCP tool, so this script exercises exactly what
+logic itself lives in `browser_mcp_sainsburys/site.py`, registered as the
+`sainsburys_search` MCP tool, so this script exercises exactly what
 the server would run. Nothing is added to the basket.
 
 Needs a captured session first - run `scripts/sainsburys_login.py` (with your
@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from browser_interaction_mcp.sainsburys import search_products
+from browser_mcp_sainsburys.site import search_products
 
 
 def main(argv: list[str]) -> int:

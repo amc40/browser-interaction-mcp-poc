@@ -1,0 +1,295 @@
+"""Coordinates one app's out-of-band browser login.
+
+One login runs at a time, per app. This owns the site's login-worker
+subprocess, surfaces its progress to :mod:`browser_mcp_core.login_routes`,
+relays a verification code to it, and kills it if it overruns.
+
+Nothing here knows which site is being logged in to: the worker module to spawn
+and the name to put in the operator-facing copy both arrive from the site's
+:class:`~browser_mcp_core.site.LoginPage`.
+
+Nothing here is async or FastMCP-aware: the route handlers call these plain,
+quick methods directly. The password is handed to the worker over its stdin
+pipe and is not retained here afterwards.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+#: How long the worker parks on the MFA step waiting for a verification code.
+OTP_WAIT_SECONDS = 300.0
+#: Hard cap on a whole attempt, a margin above ``OTP_WAIT_SECONDS``. A worker
+#: still running past this is killed - the defence against a wedged Chromium
+#: that never reaches the OTP step.
+MAX_ATTEMPT_SECONDS = 420.0
+#: How long a finished attempt's outcome stays shown before the page offers a
+#: fresh start.
+TERMINAL_RETENTION_SECONDS = 300.0
+
+
+class LoginState(StrEnum):
+    """Where a login attempt has got to."""
+
+    AWAITING_PASSWORD = "awaiting_password"  # noqa: S105 - a state name, not a credential
+    LOGGING_IN = "logging_in"
+    AWAITING_OTP = "awaiting_otp"
+    DONE = "done"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+
+_ACTIVE = frozenset({LoginState.LOGGING_IN, LoginState.AWAITING_OTP})
+_TERMINAL = frozenset({LoginState.DONE, LoginState.FAILED, LoginState.EXPIRED})
+
+
+def login_messages(display_name: str) -> dict[LoginState, str]:
+    """Build the operator-facing copy for one site.
+
+    Args:
+        display_name: The site's name as a person would write it.
+
+    Returns:
+        A message per state, ready to show on the login page.
+    """
+    return {
+        LoginState.AWAITING_PASSWORD: (f"Enter your {display_name} account password."),
+        LoginState.LOGGING_IN: f"Signing in to {display_name}\u2026",
+        LoginState.AWAITING_OTP: (
+            f"{display_name} asked for a verification code. Enter it to finish."
+        ),
+        LoginState.DONE: f"Your {display_name} session has been refreshed.",
+        LoginState.FAILED: "The login did not complete.",
+        LoginState.EXPIRED: "The login timed out. Start again when you're ready.",
+    }
+
+
+@dataclass(frozen=True)
+class LoginStatus:
+    """A snapshot of the current attempt, for the page and the poll endpoint."""
+
+    state: LoginState
+    detail: str
+
+    @property
+    def terminal(self) -> bool:
+        """Whether nothing further will happen without a fresh start."""
+        return self.state in _TERMINAL
+
+
+class LoginInProgressError(RuntimeError):
+    """Raised when a password is submitted while an attempt is already active."""
+
+
+@dataclass
+class _Attempt:
+    ipc_dir: Path
+    proc: subprocess.Popen[str]
+    started_at: float
+    timer: threading.Timer
+    detail: str
+    state: LoginState = LoginState.LOGGING_IN
+    finished_at: float | None = None
+
+
+class LoginFlow:
+    """The single in-flight login for this server process."""
+
+    def __init__(  # noqa: PLR0913 - a flow is configured once, by name
+        self,
+        *,
+        slug: str,
+        display_name: str,
+        worker_module: str,
+        username: str,
+        storage_state_path: Path,
+        popen: Callable[..., subprocess.Popen[str]] | None = None,
+        otp_wait_seconds: float = OTP_WAIT_SECONDS,
+        max_attempt_seconds: float = MAX_ATTEMPT_SECONDS,
+    ) -> None:
+        """Configure the flow.
+
+        Args:
+            slug: The app's short name, used to label its IPC directory so two
+                apps' login attempts are distinguishable on a shared host.
+            display_name: The site's name, for the operator-facing copy.
+            worker_module: Module to spawn as ``python -m`` for one attempt.
+            username: The site account's username, forwarded to the worker.
+            storage_state_path: Where the worker writes the captured session.
+            popen: Seam for tests; defaults to :class:`subprocess.Popen`.
+            otp_wait_seconds: Passed to the worker as its OTP poll timeout.
+            max_attempt_seconds: Kill any attempt still running past this.
+        """
+        self._slug = slug
+        self.login_messages = login_messages(display_name)
+        self._worker_module = worker_module
+        self._username = username
+        self._storage_state_path = storage_state_path
+        self._popen = popen or subprocess.Popen
+        self._otp_wait_seconds = otp_wait_seconds
+        self._max_attempt_seconds = max_attempt_seconds
+        self._lock = threading.Lock()
+        self._attempt: _Attempt | None = None
+
+    # -- called by the route handlers -------------------------------------
+
+    def start(self, password: str) -> None:
+        """Begin a login attempt.
+
+        Args:
+            password: The account password, handed straight to the worker.
+
+        Raises:
+            LoginInProgressError: If an attempt is already logging in or
+                waiting for a verification code.
+        """
+        with self._lock:
+            self._refresh_locked()
+            if self._attempt is not None and self._attempt.state in _ACTIVE:
+                msg = "A login is already in progress."
+                raise LoginInProgressError(msg)
+            self._teardown_locked()
+
+            # mkdtemp is already 0700; it also holds a failure screenshot that
+            # can show the typed username or an on-screen OTP, so it must stay
+            # owner-only. Torn down within TERMINAL_RETENTION_SECONDS.
+            ipc_dir = Path(tempfile.mkdtemp(prefix=f"{self._slug}-login-"))
+            proc = self._popen(
+                [
+                    sys.executable,
+                    "-m",
+                    self._worker_module,
+                    "--storage-state",
+                    str(self._storage_state_path),
+                    "--ipc-dir",
+                    str(ipc_dir),
+                    "--otp-timeout",
+                    str(self._otp_wait_seconds),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            if proc.stdin is not None:
+                proc.stdin.write(
+                    json.dumps({"username": self._username, "password": password})
+                    + "\n"
+                )
+                proc.stdin.close()
+
+            timer = threading.Timer(
+                self._max_attempt_seconds, self._kill_overrun, [proc]
+            )
+            timer.daemon = True
+            timer.start()
+            self._attempt = _Attempt(
+                ipc_dir=ipc_dir,
+                proc=proc,
+                started_at=time.monotonic(),
+                timer=timer,
+                detail=self.login_messages[LoginState.LOGGING_IN],
+            )
+
+    def submit_otp(self, code: str) -> None:
+        """Relay a verification code to a parked worker.
+
+        A no-op unless an attempt is actually waiting for one, so a stray
+        submission cannot disturb anything.
+        """
+        if not code:
+            return
+        with self._lock:
+            self._refresh_locked()
+            attempt = self._attempt
+            if attempt is None or attempt.state is not LoginState.AWAITING_OTP:
+                return
+            (attempt.ipc_dir / "otp").write_text(code, encoding="utf-8")
+
+    def status(self) -> LoginStatus:
+        """Return the current attempt's state, ready for a password if idle."""
+        with self._lock:
+            self._refresh_locked()
+            attempt = self._attempt
+            if attempt is None:
+                return LoginStatus(
+                    LoginState.AWAITING_PASSWORD,
+                    self.login_messages[LoginState.AWAITING_PASSWORD],
+                )
+            return LoginStatus(attempt.state, attempt.detail)
+
+    def shutdown(self) -> None:
+        """Kill any running worker and forget the attempt (tests, shutdown)."""
+        with self._lock:
+            self._teardown_locked()
+
+    # -- internals ------------------------------------------------------------
+
+    def _refresh_locked(self) -> None:
+        """Update the cached attempt state from the worker's status file."""
+        attempt = self._attempt
+        if attempt is None or attempt.state in _TERMINAL:
+            self._expire_stale_terminal_locked()
+            return
+
+        status_file = attempt.ipc_dir / "status.json"
+        if status_file.is_file():
+            try:
+                payload = json.loads(status_file.read_text(encoding="utf-8"))
+                attempt.state = LoginState(payload["state"])
+                attempt.detail = str(payload["detail"])
+            except (ValueError, KeyError):
+                pass
+
+        exited = attempt.proc.poll() is not None
+        if attempt.state not in _TERMINAL and exited:
+            attempt.state = LoginState.FAILED
+            attempt.detail = self.login_messages[LoginState.FAILED]
+
+        if attempt.state not in _TERMINAL and (
+            time.monotonic() - attempt.started_at > self._max_attempt_seconds
+        ):
+            self._kill_overrun(attempt.proc)
+            attempt.state = LoginState.EXPIRED
+            attempt.detail = self.login_messages[LoginState.EXPIRED]
+
+        if attempt.state in _TERMINAL and attempt.finished_at is None:
+            attempt.finished_at = time.monotonic()
+            attempt.timer.cancel()
+
+    def _expire_stale_terminal_locked(self) -> None:
+        attempt = self._attempt
+        if (
+            attempt is not None
+            and attempt.finished_at is not None
+            and time.monotonic() - attempt.finished_at > TERMINAL_RETENTION_SECONDS
+        ):
+            self._teardown_locked()
+
+    def _teardown_locked(self) -> None:
+        attempt = self._attempt
+        if attempt is None:
+            return
+        attempt.timer.cancel()
+        self._kill_overrun(attempt.proc)
+        shutil.rmtree(attempt.ipc_dir, ignore_errors=True)
+        self._attempt = None
+
+    @staticmethod
+    def _kill_overrun(proc: subprocess.Popen[str]) -> None:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)

@@ -1,0 +1,34 @@
+# One site. A second site is a sibling of this directory: the same three
+# modules, a `Site` handed to `browser_mcp_core.build_server`, and six lines in
+# the fleet inventory. Nothing here is imported by core.
+[project]
+name = "browser-mcp-sainsburys"
+version = "0.1.0"
+description = "Pre-approved Sainsbury's browser actions, exposed over MCP"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "amc40" }]
+dependencies = [
+    "browser-mcp-core",
+    "fastmcp>=3.4.5,<4",
+    "playwright>=1.56.0,<2",
+    "pydantic>=2.13.4,<3",
+]
+
+# The console script keeps its old name on purpose: the deployed systemd unit
+# runs `{{ mcp_checkout_dir }}/.venv/bin/{{ app_console_script }}`, and stage 1
+# of docs/scaling-plan.md is explicitly a restructure the deployment does not
+# learn about. Renaming it belongs with the per-app units in stage 3.
+[project.scripts]
+browser-interaction-mcp = "browser_mcp_sainsburys.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+browser-mcp-core = { workspace = true }
+
+[tool.deptry]
+known_first_party = ["browser_mcp_sainsburys"]

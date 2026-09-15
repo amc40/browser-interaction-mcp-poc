@@ -167,7 +167,7 @@ when named explicitly — see "Two phases" above.
 
 Re-running this whole playbook is the right tool for infra changes, but heavy
 for "one Python file changed, ship it." `deploy_webhook.py`
-(`src/browser_interaction_mcp/`), installed and run by the `deploy_webhook`
+(`packages/core/src/browser_mcp_core/`), installed and run by the `deploy_webhook`
 role, is a small always-on receiver that lets GitHub Actions trigger a
 code-only redeploy — `git reset --hard origin/main`, `uv sync`, a Playwright
 browser check, then a restart — without opening any inbound port or needing

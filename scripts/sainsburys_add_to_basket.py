@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""CLI wrapper for `browser_interaction_mcp.sainsburys.add_to_basket`.
+"""CLI wrapper for `browser_mcp_sainsburys.site.add_to_basket`.
 
 Run this to validate the action for real, once a session exists - the logic
-itself lives in `src/browser_interaction_mcp/sainsburys.py`, registered as
+itself lives in `browser_mcp_sainsburys/site.py`, registered as
 the `sainsburys_add_to_basket` MCP tool, so this script exercises exactly
 what the server would run.
 
@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from browser_interaction_mcp.sainsburys import add_to_basket
+from browser_mcp_sainsburys.site import add_to_basket
 
 
 def main(argv: list[str]) -> int:

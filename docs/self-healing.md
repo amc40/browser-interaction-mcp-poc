@@ -150,7 +150,7 @@ anticipate what a given site puts in its own attributes:
   subtree — the heuristic discussed above, and the part to check against real
   bundles rather than trust in advance.
 - **The operator's own credentials** are removed by
-  [`redaction.py`](../src/browser_interaction_mcp/redaction.py), which the
+  [`redaction.py`](../packages/core/src/browser_mcp_core/redaction.py), which the
   bundle builder reuses rather than reimplements. That covers values the server
   holds, exactly and in every encoding. It does **not** cover a token the
   automated site puts in its own markup — that is the residual, and it is what

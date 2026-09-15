@@ -70,9 +70,11 @@ repos:
 
       - id: deptry
         name: deptry
-        entry: uv run --frozen deptry src tests
+        # Once per workspace member: deptry reads a package's declared
+        # dependencies from the pyproject.toml in its working directory.
+        entry: make deps
         language: system
-        files: ^(src|tests)/.*\.py$|^pyproject\.toml$
+        files: ^packages/.*\.py$|^(packages/.*/)?pyproject\.toml$
         pass_filenames: false
         require_serial: true
 

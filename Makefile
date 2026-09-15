@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := check
 .PHONY: install check format lint types deps audit test run clean
 
-install:  ## Sync the environment and install the git hooks
+install:  ## Sync the workspace and install the git hooks
 	uv sync --all-groups
 	uv run pre-commit install --install-hooks
 
@@ -16,8 +16,12 @@ lint:
 types:
 	uv run mypy
 
+# deptry resolves a package's declared dependencies from the pyproject.toml in
+# its working directory, so it runs once per workspace member rather than once
+# over `packages/`. `--project` keeps both runs in the workspace's one venv.
 deps:  ## Unused, missing and misplaced dependencies, plus lockfile freshness
-	uv run deptry src tests
+	cd packages/core && uv run --project ../.. deptry src tests
+	cd packages/sainsburys && uv run --project ../.. deptry src tests
 	uv lock --check
 
 audit:  ## Known vulnerabilities in the locked dependencies
@@ -26,7 +30,7 @@ audit:  ## Known vulnerabilities in the locked dependencies
 test:
 	uv run pytest --cov
 
-run:  ## Start the server on stdio
+run:  ## Start the Sainsbury's server on stdio
 	uv run browser-interaction-mcp
 
 clean:
