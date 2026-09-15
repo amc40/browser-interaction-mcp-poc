@@ -7,8 +7,15 @@ requires-python = ">=3.13"
 license = "MIT"
 authors = [{ name = "amc40" }]
 dependencies = [
+    # Floor pinned above every published Authlib advisory, notably the
+    # cache-backed state CSRF fixed in 1.6.11 (CVE-2026-41425). See
+    # login_oauth.py for why this integration must stay session-backed.
+    "authlib>=1.7.1,<2",
     "fastmcp>=3.4.5,<4",
     "httpx>=0.28.1,<0.29",
+    # What starlette's SessionMiddleware signs the login cookie with; it is
+    # starlette's own choice for that (listed in its "full" extra).
+    "itsdangerous>=2.2.0,<3",
     "mcp>=1.29.0,<2",
     "playwright>=1.56.0,<2",
     "pydantic>=2.13.4,<3",
@@ -33,6 +40,8 @@ dev = [
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.4",
+    # Authlib ships no type information of its own.
+    "types-authlib>=1.8.0",
 ]
 
 # ---------------------------------------------------------------------------
@@ -136,4 +145,8 @@ known_first_party = ["browser_interaction_mcp"]
 [tool.deptry.per_rule_ignores]
 # `mcp` is only imported under `TYPE_CHECKING`, which deptry does not see, but
 # the types come straight from it so it stays a direct dependency.
-DEP002 = ["mcp"]
+#
+# `itsdangerous` is never imported by this package: starlette's
+# SessionMiddleware imports it. Starlette declares it only in its "full" extra,
+# so nothing else guarantees it is installed and it has to be declared here.
+DEP002 = ["mcp", "itsdangerous"]

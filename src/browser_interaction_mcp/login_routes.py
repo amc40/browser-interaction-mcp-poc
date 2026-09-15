@@ -235,7 +235,7 @@ class _LoginRoutes:
 
     async def page(self, request: Request) -> Response:
         if self._auth.authed_user_id(request) is None:
-            return self._auth.begin()
+            return await self._auth.begin(request)
         return _render(self._flow.status())
 
     async def callback(self, request: Request) -> Response:

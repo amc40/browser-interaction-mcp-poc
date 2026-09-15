@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from browser_interaction_mcp.redaction import build_redactor, install_log_redaction
-from browser_interaction_mcp.server import build_server
+from browser_interaction_mcp.server import build_server, http_middleware
 from browser_interaction_mcp.settings import Settings
 
 
@@ -18,7 +18,12 @@ def main() -> None:
 
     server = build_server(settings)
     if settings.transport == "http":
-        server.run(transport="http", host=settings.host, port=settings.port)
+        server.run(
+            transport="http",
+            host=settings.host,
+            port=settings.port,
+            middleware=http_middleware(settings),
+        )
     else:
         server.run(transport="stdio")
 

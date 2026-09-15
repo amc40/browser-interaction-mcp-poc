@@ -1,25 +1,26 @@
 """Integration tests for the /sainsburys-login page, driven over ASGI.
 
 The login subprocess is faked (no Playwright, no browser); the GitHub OAuth
-round trip has its own unit tests in test_login_oauth.py, so here the session
-cookie is forged directly with the same signing key the app uses.
+round trip has its own tests in test_login_oauth.py, so here the session cookie
+is minted directly, the same way starlette's SessionMiddleware mints it.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+from base64 import b64encode
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from itsdangerous import TimestampSigner
 from pydantic import SecretStr
 
-from browser_interaction_mcp.login_oauth import BrowserGithubAuth
 from browser_interaction_mcp.login_routes import _render
 from browser_interaction_mcp.sainsburys_login_flow import LoginState, LoginStatus
-from browser_interaction_mcp.server import build_server
+from browser_interaction_mcp.server import build_server, http_middleware
 from browser_interaction_mcp.settings import Settings
 
 if TYPE_CHECKING:
@@ -90,7 +91,7 @@ async def client(
     workers: list[_FakeWorker],
 ) -> AsyncIterator[httpx.AsyncClient]:
     del workers
-    app = build_server(settings).http_app()
+    app = build_server(settings).http_app(middleware=http_middleware(settings))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url=_BASE_URL, follow_redirects=False
@@ -100,7 +101,11 @@ async def client(
 
 @pytest.fixture
 def session_headers(settings: Settings) -> dict[str, str]:
-    cookie = BrowserGithubAuth(settings)._issue_cookie("36701168")
+    """A signed-in session, built the way SessionMiddleware builds one."""
+    secret = settings.github_client_secret
+    assert secret is not None
+    payload = b64encode(json.dumps({"github_user_id": "36701168"}).encode())
+    cookie = TimestampSigner(secret.get_secret_value()).sign(payload).decode()
     return {"cookie": f"bimcp_login_session={cookie}"}
 
 
