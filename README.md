@@ -332,11 +332,25 @@ Refresh the pinned pre-commit hooks with `uv run pre-commit autoupdate`.
   box and result-tile add control are all confirmed against the live site.
   The local script writes the same file by the same flow, but hasn't been run
   with real credentials itself.
-- **Hardening `/sainsburys-login`.** It works - see above - but the branch
-  that added it skipped the 100% coverage gate and has no `/security-review`
-  on it. The GitHub session cookie is the whole gate on a public endpoint
-  that accepts a password; the concurrency is one in-process subprocess with
-  a wall-clock kill.
+- **Hardening `/sainsburys-login`.** The sign-in gate itself has since been
+  reworked in
+  [#42](https://github.com/amc40/browser-interaction-mcp-poc/pull/42): the
+  handshake is Authlib's, the session cookie is starlette's
+  `SessionMiddleware`, and the CSRF `state` moved out of a process-global dict
+  - which was a real bug, the one Authlib's own advisories (CVE-2025-68158,
+  CVE-2026-41425) describe - and into the session. It is covered by the suite
+  like everything else, at the same 100% line and branch gate.
+
+  What is still open is what stands *behind* that gate, which #42 did not set
+  out to change. **The signed session cookie is the only thing establishing
+  who the caller is**, on a public endpoint that accepts a password. (The
+  password and OTP POSTs additionally compare the `Origin` header's host
+  alongside the `SameSite=Strict` cookie, but that is CSRF defence, not
+  authentication.) **That cookie is signed with the GitHub OAuth app's client
+  secret** rather than a key of its own - deliberately, so that rotating the
+  secret invalidates open sessions, though sessions expire after 900 seconds
+  regardless. And the concurrency is still one in-process subprocess with a
+  420-second wall-clock kill.
 - **Encrypting the captured session at rest.** `sainsburys_login.py` and the
   login subprocess both write the `storage_state` file with owner-only
   permissions, but it's still a plaintext file on disk holding a working
