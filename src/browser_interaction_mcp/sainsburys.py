@@ -810,6 +810,6 @@ def refresh_session(
 
     # rw for the owner only: this file is as sensitive as the login that
     # produced it. Done here, not by each caller, so both
-    # scripts/sainsburys_login.py and the sainsburys_refresh_session tool get
+    # scripts/sainsburys_login.py and the /sainsburys-login page's worker get
     # it for free.
     storage_state_path.chmod(stat.S_IRUSR | stat.S_IWUSR)

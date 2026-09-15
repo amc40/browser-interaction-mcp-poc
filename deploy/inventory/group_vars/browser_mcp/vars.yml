@@ -102,7 +102,7 @@ mcp_github_token_cache_seconds: 60
 mcp_oauth_base_url: "https://{{ mcp_public_hostname }}"
 
 # --- Sainsbury's session ----------------------------------------------------
-# Where sainsburys_refresh_session (or scripts/sainsburys_login.py, run here
+# Where the /sainsburys-login page (or scripts/sainsburys_login.py, run here
 # by hand) writes the captured session, and where add_to_basket reads it
 # back from. Just a path under the existing state dir - not personal, not
 # secret - so it's fine to track here, unlike the account username below.

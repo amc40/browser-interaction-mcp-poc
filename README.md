@@ -101,14 +101,16 @@ searches on the cleaned-up text (a query ending in literal ellipsis characters
 wouldn't find much on the real site's own search either), and reports back the
 product's real, full name.
 
-**`sainsburys_add_to_basket` is still unverified end to end.** Its selectors
-are drawn from a real recording rather than invented, but nobody has run it
-against a real, authenticated session yet - that needs credentials this
-project does not have and should not be given inside an automated session,
-see `scripts/sainsburys_login.py`'s own docstring for why.
-`scripts/sainsburys_add_to_basket.py` exists for whoever has those
-credentials to run it for real and fix whatever still doesn't match. See
-[Not done yet](#not-done-yet).
+**`sainsburys_add_to_basket` has been run end to end against the real site.**
+Signing in at `/sainsburys-login` on the Pi and then searching and adding to
+the basket with the session that captured confirms the whole chain against
+the live pages: the login-form field ids, the consent handling, the MFA step,
+the search box and the result-tile add control. Its selectors were drawn from
+a real recording rather than invented, and that run is what turned "believed
+correct" into "observed correct". `scripts/sainsburys_add_to_basket.py` is
+the CLI wrapper for re-running it directly against the real page whenever a
+session exists. What has *not* been run with real credentials is the local
+`scripts/sainsburys_login.py` - see [Not done yet](#not-done-yet).
 
 It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
 Tunnel. The target, the options rejected on the way to it, and what that
@@ -210,6 +212,13 @@ BROWSER_MCP_GITHUB_CLIENT_ID=Ov23li...
 BROWSER_MCP_GITHUB_CLIENT_SECRET=...
 ```
 
+The `/sainsburys-login` page reuses that same OAuth app for its own,
+plain-browser sign-in, and GitHub scopes a redirect URI to sub-paths of the
+registered callback. So if that page is being served too, register
+`http://127.0.0.1:8000/sainsburys-login/auth/callback` as a second callback
+URL — with only the first, the MCP flow works and the login page's sign-in
+fails.
+
 Starting on http without both credentials is a startup error rather than an
 unauthenticated server. Point a client at `http://127.0.0.1:8000/mcp` and it
 will prompt for the OAuth flow on first connect.
@@ -296,21 +305,23 @@ defaults. Unknown or malformed values fail at startup rather than being ignored.
 ## Quality gates
 
 Every gate below runs in CI on pushes and pull requests, and again daily on a
-schedule so that newly published advisories surface without a push. `make check`
-runs the same set locally, and `pre-commit` runs the fast ones on commit and the
-slow ones on push.
+schedule so that newly published advisories surface without a push — except
+`gitleaks`, which is a `pre-commit` hook and nothing else. `make check` runs
+the gates that need a working tree rather than a git history or a built
+distribution, so it omits `gitleaks`, `zizmor` and the packaging check;
+`pre-commit` runs the fast ones on commit and the slow ones on push.
 
 | Gate | Tool | What it enforces |
 | --- | --- | --- |
 | Formatting | `ruff format` | One canonical formatting, checked not applied |
-| Linting | `ruff check` | Every ruff rule (`select = ["ALL"]`), minus four that contradict the formatter or each other. Includes flake8-bandit security rules, docstring rules and complexity limits |
+| Linting | `ruff check` | Every ruff rule (`select = ["ALL"]`), minus five: four that contradict the formatter or each other, plus `CPY001` because this project uses no per-file copyright headers. Includes flake8-bandit security rules, docstring rules and complexity limits |
 | Types | `mypy --strict` | Strict mode plus `warn_unreachable` and six extra error codes; `src` and `tests` both checked |
 | Tests | `pytest` | Warnings are errors, strict markers and config, strict `xfail` |
 | Coverage | `coverage` | 100% line *and* branch coverage, enforced by `fail_under` |
 | Dependencies | `deptry` | No unused, missing or transitive-but-imported dependencies |
 | Lockfile | `uv lock --check` | `uv.lock` is in sync with `pyproject.toml` |
 | Vulnerabilities | `pip-audit` | No known advisories against any locked package, dev tooling included |
-| Secrets | `gitleaks` | No credentials committed — the main risk here, since this server runs as me |
+| Secrets | `gitleaks` | No credentials committed — the main risk here, since this server runs as me. `pre-commit` only; there is no CI job for it |
 | Workflows | `zizmor` | Static analysis of the GitHub Actions workflows themselves |
 | Code scanning | CodeQL | `security-extended` query suite, on PRs and weekly |
 | Packaging | `uv build` + `twine check` | The distribution builds and its metadata is valid |

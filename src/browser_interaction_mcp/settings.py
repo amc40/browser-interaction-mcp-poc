@@ -108,8 +108,8 @@ class Settings(BaseSettings):
         description="Path to a Playwright storage_state JSON file holding a "
         "logged-in Sainsbury's session - cookies and local storage, not a "
         "password. Written by scripts/sainsburys_login.py (run locally) or "
-        "the sainsburys_refresh_session tool (run remotely, e.g. on a host "
-        "the operator doesn't have routine shell access to); actions that "
+        "the /sainsburys-login page (used remotely, e.g. on a host the "
+        "operator doesn't have routine shell access to); actions that "
         "need to be logged in refuse to run without it. Never commit this "
         "file - treat it like the credentials it stands in for.",
     )
@@ -117,8 +117,9 @@ class Settings(BaseSettings):
         default=None,
         min_length=1,
         description="Sainsbury's account email/username. Required by the "
-        "sainsburys_refresh_session tool, which types it into the real login "
-        "form; not required for anything that only reads "
+        "/sainsburys-login page, which types it into the real login form and "
+        "is only served when this is set; not required for anything that "
+        "only reads "
         "sainsburys_storage_state_path. A SecretStr - not because a username "
         "grants access on its own, but so redaction.py covers it "
         "automatically like every other credential. Personal enough that it "

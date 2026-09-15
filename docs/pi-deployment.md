@@ -61,7 +61,7 @@ claude.ai  ──HTTPS──>  Cloudflare edge  ──outbound tunnel──>  cl
                                                                     │
                                                           browser-interaction-mcp
                                                                     │
-                                                             Chromium (headless)
+                                                      Chromium (headed, under Xvfb)
 ```
 
 The loopback default at `settings.py:37` stays correct — `cloudflared` dials
@@ -93,6 +93,7 @@ on both counts. So:
 | --- | --- |
 | `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` | `https://<tunnel-host>` — the public URL, not the loopback one |
 | GitHub OAuth app callback | `https://<tunnel-host>/auth/callback`, replacing the loopback callback the README documents |
+| GitHub OAuth app callback, second | `https://<tunnel-host>/sainsburys-login/auth/callback` — the `/sainsburys-login` page reuses the same OAuth app, and GitHub scopes a redirect URI to sub-paths of the registered callback. Without it the MCP flow works and that page's sign-in fails |
 | `BROWSER_MCP_HOST` | `127.0.0.1`, unchanged |
 | claude.ai connector URL | `https://<tunnel-host>/mcp` |
 
@@ -215,7 +216,7 @@ libraries Chromium needed.
 | --- | --- | --- |
 | Serve over HTTP | `BROWSER_MCP_TRANSPORT=http` | `settings.py:33` defaults to stdio; the `run` target in the `Makefile` is stdio-only |
 | Public OAuth base URL | `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` | Already supported; see [above](#what-the-tunnel-changes-about-authentication) |
-| Browser actions | `tools.py` | Currently only `server_info`; the deployment is untested against real browser work until these exist |
+| Browser actions | `tools.py` | Done: `sainsburys_products_we_love`, `sainsburys_search` and `sainsburys_add_to_basket`, all three run against the live site from this host |
 | Playbook | `deploy/` | Done: one app, one host — a second repository buys nothing at this size |
 
 Authentication needs no code change: it landed with SDR 0001.
@@ -288,8 +289,13 @@ means it inherits one that's already there.
   Relevant only if a target site needs proprietary codecs or sniffs the brand.
 - **Uptime becomes an operational concern.** Connector calls fail whenever the
   Pi is off or offline.
-- **Headless detection.** If a target site blocks headless Chromium, the usual
-  escape hatch is `xvfb-run` with a headed browser.
+- **Headless detection, confirmed.** Sainsbury's (and Tesco, tested for
+  comparison) run Akamai Bot Manager, which blocks *headless* Chromium
+  specifically, regardless of network origin or user agent. So this host runs
+  a headed browser under a short-lived Xvfb display —
+  `browser_page(headless=False)`, and the `browser` role installs Xvfb for it.
+  Assume any large retailer does the same; see
+  [`site-automation-gotchas.md`](site-automation-gotchas.md).
 - **Single instance only.** Both the rate limiter and the token-verification
   cache are per-process. Do not scale this horizontally.
 

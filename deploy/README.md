@@ -41,7 +41,11 @@ Pi, but they're asked at genuinely different points in the connection.
 
 Elsewhere, once:
 
-- A **GitHub OAuth app** with the callback `https://<your-host>/auth/callback`.
+- A **GitHub OAuth app** with two callbacks: `https://<your-host>/auth/callback`
+  for the MCP endpoint, and `https://<your-host>/sainsburys-login/auth/callback`
+  for the login page, which reuses the same app. GitHub scopes a redirect URI to
+  sub-paths of the registered callback, so the second is not implied by the
+  first — without it the MCP flow works and the login page's sign-in fails.
 - A **named Cloudflare tunnel** — `cloudflared tunnel create browser-interaction-mcp`
   on any machine logged in to Cloudflare — and its DNS route:
   `cloudflared tunnel route dns <tunnel-id> <your-host>`. Neither is automated
