@@ -32,9 +32,30 @@ updates:
     # full queue silently postpones the next PR - including the one the audit
     # is waiting for.
     open-pull-requests-limit: 10
+    # This repository's own packages, never PyPI's. Under a uv workspace each
+    # package in `packages/` is a dependency of another, sourced with
+    # `{ workspace = true }`, and Dependabot's uv support still looks such a
+    # member up on PyPI as though it were published (dependabot-core#14004,
+    # open) - the layout in that report is this one. Today that is a 404 and
+    # noise; if the name were ever registered there, it would be a bump PR for
+    # a package this repository does not install from PyPI. Nothing about
+    # these can be updated from outside, so nothing is lost by ignoring them.
+    # A no-op until the workspace restructure lands.
+    ignore:
+      - dependency-name: "browser-mcp-*"
     groups:
-      # One PR for all the tooling, but runtime dependencies stay separate so a
-      # failing linter bump never blocks a security patch to a runtime package.
+      # Intended as one PR for all the tooling, with runtime dependencies kept
+      # separate so a failing linter bump never blocks a security patch to a
+      # runtime package. For uv it currently matches nothing: Dependabot
+      # classifies every uv dependency as production, `dependency-groups`
+      # included (dependabot-core#13202, open), so each dev tool gets its own
+      # PR. The separation still holds - nothing is grouped at all.
+      #
+      # Kept rather than removed so it starts working when #13202 is fixed.
+      # When it does, a grouped bump can rewrite a similarly named line
+      # (dependabot-core#15558: `pytest` next to `pytest-asyncio` and
+      # `pytest-cov` is that shape here). The manifest and `uv.lock` then
+      # disagree, which the `lockfile` CI job's `uv lock --check` fails on.
       dev-dependencies:
         dependency-type: development
         update-types: [minor, patch]
