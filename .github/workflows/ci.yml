@@ -96,6 +96,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: uvx zizmor@1.28.0 .github/
 
+  # A claude/heal-* branch may change one site's locators.py and test fixtures,
+  # nothing else (see browser_mcp_core/heal_surface.py). Runs on every pull
+  # request and passes at once on any other branch, so it can be a required
+  # check. Not in `deploy`'s needs: it never runs on a push to main.
+  heal-surface:
+    name: heal surface
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge base with the base branch has to be in the clone.
+          fetch-depth: 0
+      - name: A heal branch stays within its surface
+        # The checker is taken from the base commit, not the branch: a branch
+        # that edited it could otherwise approve itself. Stdlib only, so the
+        # runner's own Python runs it without a uv sync.
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          source="packages/core/src/browser_mcp_core/heal_surface.py"
+          if ! git cat-file -e "$BASE_SHA:$source"; then
+            # Only until the pull request that adds the checker has merged.
+            echo "The base has no heal-surface checker yet: nothing to check"
+            exit 0
+          fi
+          checker="$RUNNER_TEMP/heal_surface.py"
+          git show "$BASE_SHA:$source" > "$checker"
+          python3 "$checker" --branch "$HEAD_REF" --base "$BASE_SHA"
+
   build:
     name: build
     runs-on: ubuntu-latest

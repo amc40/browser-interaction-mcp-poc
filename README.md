@@ -244,6 +244,8 @@ fact that shell access on the host bypasses all of this.
 | `packages/core/src/browser_mcp_core/login_flow.py` | The login state machine behind them: one attempt at a time, parked on the MFA step |
 | `packages/core/src/browser_mcp_core/login_worker.py` | The subprocess that drives the real login, so a hung Chromium can be killed |
 | `packages/core/src/browser_mcp_core/login_steps.py` | The shape of a real login; a site supplies the steps |
+| `packages/core/src/browser_mcp_core/locator_table.py` | The row type for a site's locator table, and `resolve()` to turn a row into a Playwright locator |
+| `packages/core/src/browser_mcp_core/heal_surface.py` | CI's check that a `claude/heal-*` branch changes only one site's locator table and fixtures |
 | `packages/core/src/browser_mcp_core/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy on the Pi — not part of the running server |
 | `packages/core/src/browser_mcp_core/auth.py` | Who may use the server: the OAuth provider and the login check |
 | `packages/core/src/browser_mcp_core/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
@@ -252,6 +254,7 @@ fact that shell access on the host bypasses all of this.
 | `packages/sainsburys/` | One site. A second site is a sibling directory |
 | `packages/sainsburys/src/browser_mcp_sainsburys/tools.py` | Every exposed tool. New browser actions go here |
 | `packages/sainsburys/src/browser_mcp_sainsburys/site.py` | Browser actions against Sainsbury's groceries site, and its login steps |
+| `packages/sainsburys/src/browser_mcp_sainsburys/locators.py` | Every element those actions touch, by locator id: data only, and the one file a heal may change |
 | `packages/sainsburys/src/browser_mcp_sainsburys/login_worker.py` | The module the login worker subprocess is started as, naming this site's steps |
 | `packages/sainsburys/src/browser_mcp_sainsburys/app.py` | The `Site` wiring this package to core |
 | `packages/sainsburys/src/browser_mcp_sainsburys/__main__.py` | The `browser-interaction-mcp` console script |
@@ -274,6 +277,11 @@ Add a function to `tools.py` and decorate it with `@mcp.tool`. Keep it
 deterministic and give it no parameter that a caller could use to reach a page,
 selector or script that you have not approved in code — that constraint is the
 whole point of the design, and nothing enforces it automatically.
+
+Every element the action touches gets a row in the site's `locators.py`, and
+the code asks for it by id (`_locate(page, "header.search_box")`) rather than
+building a locator inline; a test fails if `site.py` calls `get_by_role` and
+friends directly, or names an id the table does not have.
 
 ## Secret redaction
 
