@@ -133,7 +133,7 @@ the FastMCP process**: Chromium is a separate OS process, but the storage state,
 the parsed page content and the automation code all live in the server. Same
 user, same unit, same `EnvironmentFile` — so the process handling untrusted page
 content is the process holding the OAuth client secret. The one existing process
-split, `sainsburys_login_worker`, is a robustness boundary and says so in its own
+split, the login worker (`browser_mcp_core.login_worker`), is a robustness boundary and says so in its own
 docstring: it exists so a hung Chromium can be killed, it inherits the parent's
 whole environment, and it runs as the same user.
 
@@ -158,7 +158,7 @@ The proportionate fix is a second unit, not a container:
 
 - A long-lived `browser-worker` running as its own user, talking to the server
   over a Unix socket with one message per pre-approved action — the same shape
-  the tools already have, and the same pattern `sainsburys_login_worker` already
+  the tools already have, and the same pattern the login worker already
   proves, made long-lived and given its own identity.
 - The server unit then gets the three strict directives back, because it no
   longer hosts a browser.

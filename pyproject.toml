@@ -1,35 +1,14 @@
-[project]
-name = "browser-interaction-mcp"
-version = "0.1.0"
-description = "An unofficial MCP server exposing pre-approved, deterministic browser actions"
-readme = "README.md"
-requires-python = ">=3.13"
-license = "MIT"
-authors = [{ name = "amc40" }]
-dependencies = [
-    # Floor pinned above every published Authlib advisory, notably the
-    # cache-backed state CSRF fixed in 1.6.11 (CVE-2026-41425). See
-    # login_oauth.py for why this integration must stay session-backed.
-    "authlib>=1.7.1,<2",
-    "fastmcp>=3.4.5,<4",
-    "httpx>=0.28.1,<0.29",
-    # What starlette's SessionMiddleware signs the login cookie with; it is
-    # starlette's own choice for that (listed in its "full" extra).
-    "itsdangerous>=2.2.0,<3",
-    "mcp>=1.29.0,<2",
-    "playwright>=1.56.0,<2",
-    "pydantic>=2.13.4,<3",
-    "pydantic-settings>=2.14.2,<3",
-    "starlette>=1.3.1,<2",
-]
+# The workspace root. It ships no code of its own: it exists to hold the one
+# gate configuration and the one lockfile that docs/scaling-plan.md D1 chose a
+# monorepo in order to have. Every `[tool.*]` block below is written once here
+# and applies to every package under `packages/`, which is the thing a repo per
+# site cannot do - Python has no clean way to share a `[tool.ruff]` block, so
+# split repositories each carry a copy and they drift.
+[tool.uv.workspace]
+members = ["packages/*"]
 
-[project.scripts]
-browser-interaction-mcp = "browser_interaction_mcp.__main__:main"
-
-[build-system]
-requires = ["uv_build>=0.12.2,<0.13.0"]
-build-backend = "uv_build"
-
+# Installed for the whole workspace, because every gate runs across every
+# package at once rather than per package.
 [dependency-groups]
 dev = [
     "deptry>=0.23.1",
@@ -50,7 +29,7 @@ dev = [
 [tool.ruff]
 line-length = 88
 target-version = "py313"
-src = ["src", "tests"]
+src = ["packages/core/src", "packages/sainsburys/src"]
 
 [tool.ruff.lint]
 # Start from "everything", then subtract only the rules that fight the
@@ -67,16 +46,23 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = [
+"**/tests/**/*.py" = [
     "ANN401",  # test doubles legitimately forward **kwargs: Any
     "D103",    # a test's name is its documentation
+    "INP001",  # tests are collected by path under --import-mode=importlib, and
+               # two `tests` packages under `packages/` would collide by name
     "PLR2004", # magic values are fine in assertions
     "S101",    # asserts are the point of a test
     "S105",    # the credentials in tests are fakes, and gitleaks checks the rest
     "S106",
     "SLF001",  # unit tests reach into private helpers directly on purpose
 ]
-# One-off/exploratory scripts, not part of the tested, type-checked package:
+# Shared test scaffolding at the workspace root, held to the tests' rules
+# rather than the packages'.
+"conftest.py" = ["ANN401", "S106"]
+"tests_support.py" = ["ANN401"]
+"packages/core/tests/fake_site.py" = ["D103"]
+# One-off/exploratory scripts, not part of the tested, type-checked packages:
 # mypy's `files` setting already excludes this directory, and pytest's 100%
 # coverage requirement would otherwise demand tests for throwaway code.
 "scripts/**/*.py" = [
@@ -91,7 +77,7 @@ ban-relative-imports = "all"
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["browser_interaction_mcp"]
+known-first-party = ["browser_mcp_core", "browser_mcp_sainsburys"]
 required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.format]
@@ -102,7 +88,13 @@ docstring-code-format = true
 # ---------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.13"
-files = ["src", "tests"]
+files = ["packages", "conftest.py", "tests_support.py"]
+# Two packages' test suites legitimately contain a `test_settings.py` each.
+# Without this mypy derives a module name from the file name alone and calls
+# them duplicates; with it, the name is the path from the nearest base below,
+# so each package's src stays importable as itself and the tests are distinct.
+explicit_package_bases = true
+mypy_path = "packages/core/src:packages/sainsburys/src:packages/core/tests:."
 strict = true
 # Extras that `strict` does not turn on by itself.
 warn_unreachable = true
@@ -119,7 +111,13 @@ enable_error_code = [
 # Tests / coverage
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# One run over the whole workspace, not one per package: the coverage floor
+# below is a property of the fleet's code, and a per-package run would let a
+# core module be covered only by a site's tests without anyone noticing.
+testpaths = ["packages/core/tests", "packages/sainsburys/tests"]
+# Puts the workspace root on sys.path, so every package's tests can import the
+# shared scaffolding in tests_support.py.
+pythonpath = [".", "packages/core/tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = ["--strict-config", "--strict-markers", "--import-mode=importlib", "-ra"]
@@ -127,26 +125,16 @@ filterwarnings = ["error"]
 xfail_strict = true
 
 [tool.coverage.run]
-source = ["browser_interaction_mcp"]
+source = ["browser_mcp_core", "browser_mcp_sainsburys"]
 branch = true
 
 [tool.coverage.report]
 fail_under = 100
 show_missing = true
 skip_covered = true
-exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
-
-# ---------------------------------------------------------------------------
-# Dependency hygiene
-# ---------------------------------------------------------------------------
-[tool.deptry]
-known_first_party = ["browser_interaction_mcp"]
-
-[tool.deptry.per_rule_ignores]
-# `mcp` is only imported under `TYPE_CHECKING`, which deptry does not see, but
-# the types come straight from it so it stays a direct dependency.
-#
-# `itsdangerous` is never imported by this package: starlette's
-# SessionMiddleware imports it. Starlette declares it only in its "full" extra,
-# so nothing else guarantees it is installed and it has to be declared here.
-DEP002 = ["mcp", "itsdangerous"]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    # A Protocol's method bodies are declarations, never executed.
+    "^\\s*\\.\\.\\.$",
+]

@@ -17,7 +17,7 @@ verified against the real page from the deployment host. Getting there
 surfaced a real constraint worth knowing before adding a second action:
 Sainsbury's (and Tesco, tested for comparison) run Akamai Bot Manager, which
 blocks *headless* Chromium specifically, regardless of network origin or user
-agent. `browser_interaction_mcp.browser.browser_page(headless=False)` runs a
+agent. `browser_mcp_core.browser.browser_page(headless=False)` runs a
 real, visible-mode Chromium under a short-lived Xvfb display instead, which
 gets through cleanly - see that module and `sainsburys.py`'s docstrings.
 
@@ -49,9 +49,9 @@ later with the code - no live session has to stay open. This is a real,
 deliberate narrowing of "the server never sees a password" - accepted
 because the alternative, without routine host access, is no way to refresh
 a session at all. (It replaced an MCP-elicitation tool; Claude.ai's MCP
-client supports tool calls only.) See `login_routes.py`,
-`sainsburys_login_flow.py` and `sainsburys.refresh_session`'s docstring for
-the full reasoning, and
+client supports tool calls only.) See `login_routes.py`, `login_flow.py` and
+`login_steps.refresh_session`'s docstring in `packages/core/`, and the
+Sainsbury's `site.py` module docstring, for the full reasoning, and
 [`deploy/inventory/group_vars/browser_mcp/local.yml.example`](deploy/inventory/group_vars/browser_mcp/local.yml.example)
 for how the one supporting setting this needs
 (`BROWSER_MCP_SAINSBURYS_USERNAME`) reaches the Pi without ever being
@@ -235,27 +235,33 @@ fact that shell access on the host bypasses all of this.
 
 | Path | Purpose |
 | --- | --- |
-| `src/browser_interaction_mcp/server.py` | Builds the server: middleware, instructions, tool registration |
-| `src/browser_interaction_mcp/tools.py` | Every exposed tool. New browser actions go here |
-| `src/browser_interaction_mcp/browser.py` | Shared browser/page setup for every action, headless or headed |
-| `src/browser_interaction_mcp/sainsburys.py` | Browser actions against Sainsbury's public groceries site |
-| `src/browser_interaction_mcp/login_routes.py` | The `/sainsburys-login` pages: the out-of-band way to capture a session |
-| `src/browser_interaction_mcp/login_oauth.py` | The GitHub sign-in gate in front of those pages — Authlib's handshake, starlette's session |
-| `src/browser_interaction_mcp/sainsburys_login_flow.py` | The login state machine behind them: one attempt at a time, parked on the MFA step |
-| `src/browser_interaction_mcp/sainsburys_login_worker.py` | The subprocess that drives the real login, so a hung Chromium can be killed |
-| `src/browser_interaction_mcp/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy on the Pi — not part of the running server |
-| `src/browser_interaction_mcp/auth.py` | Who may use the server: the OAuth provider and the login check |
-| `src/browser_interaction_mcp/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
-| `src/browser_interaction_mcp/redaction.py` | Keeping the server's own credentials out of logs and errors |
-| `src/browser_interaction_mcp/settings.py` | Configuration, from `BROWSER_MCP_*` env vars or `.env` |
-| `src/browser_interaction_mcp/__main__.py` | The `browser-interaction-mcp` console script |
+| `packages/core/` | Everything that is not about one site: the server, auth, the browser lifecycle, the login framework, redaction, the deploy webhook |
+| `packages/core/src/browser_mcp_core/server.py` | Builds the server for a given site: middleware, instructions, tool registration |
+| `packages/core/src/browser_mcp_core/site.py` | The `Site` a package hands core — its tools, its name, its login page |
+| `packages/core/src/browser_mcp_core/browser.py` | Shared browser/page setup for every action, headless or headed |
+| `packages/core/src/browser_mcp_core/login_routes.py` | The site's login pages (`/sainsburys-login` here): the out-of-band way to capture a session |
+| `packages/core/src/browser_mcp_core/login_oauth.py` | The GitHub sign-in gate in front of those pages — Authlib's handshake, starlette's session |
+| `packages/core/src/browser_mcp_core/login_flow.py` | The login state machine behind them: one attempt at a time, parked on the MFA step |
+| `packages/core/src/browser_mcp_core/login_worker.py` | The subprocess that drives the real login, so a hung Chromium can be killed |
+| `packages/core/src/browser_mcp_core/login_steps.py` | The shape of a real login; a site supplies the steps |
+| `packages/core/src/browser_mcp_core/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy on the Pi — not part of the running server |
+| `packages/core/src/browser_mcp_core/auth.py` | Who may use the server: the OAuth provider and the login check |
+| `packages/core/src/browser_mcp_core/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
+| `packages/core/src/browser_mcp_core/redaction.py` | Keeping the server's own credentials out of logs and errors |
+| `packages/core/src/browser_mcp_core/settings.py` | `CoreSettings`, from `BROWSER_MCP_*` env vars or `.env`; a site subclasses it |
+| `packages/sainsburys/` | One site. A second site is a sibling directory |
+| `packages/sainsburys/src/browser_mcp_sainsburys/tools.py` | Every exposed tool. New browser actions go here |
+| `packages/sainsburys/src/browser_mcp_sainsburys/site.py` | Browser actions against Sainsbury's groceries site, and its login steps |
+| `packages/sainsburys/src/browser_mcp_sainsburys/login_worker.py` | The module the login worker subprocess is started as, naming this site's steps |
+| `packages/sainsburys/src/browser_mcp_sainsburys/app.py` | The `Site` wiring this package to core |
+| `packages/sainsburys/src/browser_mcp_sainsburys/__main__.py` | The `browser-interaction-mcp` console script |
 | `docs/sdr/` | Design records for decisions worth their own argument |
 | `docs/deployment.md` | What would have to change before this runs on a server |
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
 | `deploy/` | The Ansible playbook that provisions that host |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
 | `docs/self-healing-plan.md` | The staged plan for building it, and where the infrastructure has overtaken that design |
-| `docs/scaling-plan.md` | Architecture and staged plan for many sites: shared library, repo per site, per-app isolation on the Pi |
+| `docs/scaling-plan.md` | Architecture and staged plan for many sites: one workspace, a package per site, per-app isolation on the Pi |
 | `docs/site-automation-gotchas.md` | Failure patterns found driving the real site, for when this generalises |
 | `scripts/sainsburys_products_we_love.py` | CLI wrapper to run `sainsburys_products_we_love` directly, for validating it against the real page |
 | `scripts/sainsburys_login.py` | Run locally, by hand, with your own credentials: logs in to Sainsbury's for real and captures the session `add_to_basket` replays |

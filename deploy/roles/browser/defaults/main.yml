@@ -5,7 +5,7 @@
 browser_playwright_browsers:
   - chromium
 
-# Needed by browser_interaction_mcp.browser.browser_page(headless=False):
+# Needed by browser_mcp_core.browser.browser_page(headless=False):
 # Akamai's Bot Manager (Sainsbury's, Tesco - see sainsburys.py's module
 # docstring) blocks headless Chromium specifically, so any headed session
 # needs a real X display to run under. browser_page starts and stops its own

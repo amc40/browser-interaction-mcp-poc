@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""CLI wrapper for `browser_interaction_mcp.sainsburys.products_we_love`.
+"""CLI wrapper for `browser_mcp_sainsburys.site.products_we_love`.
 
 Run this to validate the scraper for real - the logic itself now lives in
-`src/browser_interaction_mcp/sainsburys.py`, registered as the
+`browser_mcp_sainsburys/site.py`, registered as the
 `sainsburys_products_we_love` MCP tool, so this script exercises exactly what
 the server would run.
 
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import sys
 
-from browser_interaction_mcp.sainsburys import products_we_love
+from browser_mcp_sainsburys.site import products_we_love
 
 
 def main() -> int:
