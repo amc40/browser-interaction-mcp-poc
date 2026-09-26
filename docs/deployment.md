@@ -6,12 +6,20 @@ it on a server breaks three of those assumptions at once — the network in fron
 of it is no longer trusted, the host is no longer only the operator's, and the
 process outlives the session that started it.
 
-**None of the following is implemented.** Until it is, http-on-loopback is the
-only configuration this repository supports. The list is ordered roughly by how
-badly each one bites.
+**None of this is implemented in the application code**, and the list is
+ordered roughly by how badly each one bites. Several items are nonetheless
+*answered by configuration* on the one host that runs this today — the
+Raspberry Pi provisioned by [`deploy/`](../deploy/README.md), described in
+[`pi-deployment.md`](pi-deployment.md).
+[`deploy/README.md`](../deploy/README.md#how-the-deployment-mitigations-land)
+maps each section to where the playbook lands it, and names the ones
+configuration cannot close because the code exposes no setting for them (§2,
+§3's signing key, §5's `LoadCredential`, §7, §9). Read that table alongside
+this one: the sections below still state what the *code* would need, which is
+why §1, §5 and §6 read as open here while being configured there.
 
-Two items that were originally on this list have since been done, and are noted
-here so the reasoning is not lost:
+Two items that were originally on this list have since been done in code, and
+are noted here so the reasoning is not lost:
 
 - **Identity is pinned to the GitHub numeric user ID**, not the login, because
   logins can be changed and a freed login can be registered by somebody else.
@@ -125,7 +133,7 @@ the FastMCP process**: Chromium is a separate OS process, but the storage state,
 the parsed page content and the automation code all live in the server. Same
 user, same unit, same `EnvironmentFile` — so the process handling untrusted page
 content is the process holding the OAuth client secret. The one existing process
-split, `sainsburys_login_worker`, is a robustness boundary and says so in its own
+split, the login worker (`browser_mcp_core.login_worker`), is a robustness boundary and says so in its own
 docstring: it exists so a hung Chromium can be killed, it inherits the parent's
 whole environment, and it runs as the same user.
 
@@ -150,7 +158,7 @@ The proportionate fix is a second unit, not a container:
 
 - A long-lived `browser-worker` running as its own user, talking to the server
   over a Unix socket with one message per pre-approved action — the same shape
-  the tools already have, and the same pattern `sainsburys_login_worker` already
+  the tools already have, and the same pattern the login worker already
   proves, made long-lived and given its own identity.
 - The server unit then gets the three strict directives back, because it no
   longer hosts a browser.

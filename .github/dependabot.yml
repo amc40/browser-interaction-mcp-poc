@@ -2,13 +2,36 @@ version: 2
 updates:
   - package-ecosystem: uv
     directory: /
+    # Matched to the nightly pip-audit gate: `scripts/audit.sh` runs from the
+    # scheduled CI job at 06:17 UTC, so check for bumps an hour ahead of it
+    # (cron is UTC unless a timezone is given). A weekly interval left the
+    # audit red for up to six more days before the fixing PR even appeared;
+    # `interval: daily` would still skip weekends, and advisories do not.
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: "17 5 * * *"
     # Wait before proposing a brand-new release, so a compromised or yanked
-    # version has time to be caught before it lands in a PR here.
+    # version has time to be caught before it lands in a PR here. Cooldown
+    # applies to version updates only - Dependabot security updates ignore it -
+    # so an advisory fix is never held back by this. Daily checks are what make
+    # the cooldown a delay of exactly this many days rather than that plus the
+    # wait for the next weekly run.
     cooldown:
       default-days: 7
       semver-major-days: 14
+    # pip-audit reads the whole exported lockfile, so a transitive pin nothing
+    # in pyproject.toml names can fail the gate, and version updates cover
+    # direct dependencies only by default. `all` asks for both. Dependabot's
+    # uv support for bumping a transitive pin on its own is still patchy
+    # (dependabot-core#14073), so treat this as the ceiling on what it may
+    # raise rather than a promise: `uv lock --upgrade` by hand is still the
+    # fallback when the audit names a package no PR arrives for.
+    allow:
+      - dependency-type: all
+    # The default of 5 is easy to sit at with a wider dependency set, and a
+    # full queue silently postpones the next PR - including the one the audit
+    # is waiting for.
+    open-pull-requests-limit: 10
     groups:
       # One PR for all the tooling, but runtime dependencies stay separate so a
       # failing linter bump never blocks a security patch to a runtime package.
@@ -18,6 +41,8 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    # Weekly still, since pip-audit does not look at actions: what covers these
+    # is zizmor, and it fails on a pinned ref regardless of the ref's age.
     schedule:
       interval: weekly
     # Only default-days is supported here; the semver-* cooldown keys are

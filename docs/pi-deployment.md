@@ -30,9 +30,10 @@ deterministic actions run, and tool calls stay rate limited.
 Two things break, both structural rather than fixable by configuration:
 
 1. **The rate limiter stops being a rate limit.** The token bucket in
-   `middleware.py:40` lives in process memory, and its docstring states the
-   invariant: *"a single bucket for the whole server … the thing being
-   protected is one browser session belonging to one operator."* Horizontal
+   `middleware.py`'s `ToolCallRateLimitingMiddleware` lives in process memory,
+   and its docstring states the invariant: *"a single bucket for the whole
+   server … the thing being protected is one browser session belonging to one
+   operator."* Horizontal
    scaling silently gives N instances N independent buckets — the same point
    [`deployment.md`](deployment.md) makes about running two workers.
 2. **No browser survives between calls.** Each invocation would relaunch
@@ -61,10 +62,10 @@ claude.ai  ──HTTPS──>  Cloudflare edge  ──outbound tunnel──>  cl
                                                                     │
                                                           browser-interaction-mcp
                                                                     │
-                                                             Chromium (headless)
+                                                      Chromium (headed, under Xvfb)
 ```
 
-The loopback default at `settings.py:37` stays correct — `cloudflared` dials
+The loopback default on `Settings.host` stays correct — `cloudflared` dials
 localhost, so the server never binds a routable interface. That is the same
 arrangement [`deployment.md`](deployment.md) asks for when it says to keep
 `BROWSER_MCP_HOST=127.0.0.1` so the reverse proxy is the only listener.
@@ -85,7 +86,7 @@ plain http over the last hop, which is precisely the case
 [`deployment.md` §1](deployment.md) warns about: FastMCP decides whether to mark
 its OAuth cookies `Secure` by testing whether `base_url` starts with `https://`,
 and builds its advertised OAuth metadata from the same value rather than from
-forwarded headers. The `oauth_base_url` property at `settings.py:106` defaults
+forwarded headers. The `Settings.oauth_base_url` property defaults
 to `http://{host}:{port}`, which here would be `http://127.0.0.1:8000` — wrong
 on both counts. So:
 
@@ -93,6 +94,7 @@ on both counts. So:
 | --- | --- |
 | `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` | `https://<tunnel-host>` — the public URL, not the loopback one |
 | GitHub OAuth app callback | `https://<tunnel-host>/auth/callback`, replacing the loopback callback the README documents |
+| GitHub OAuth app callback, second | `https://<tunnel-host>/sainsburys-login/auth/callback` — the `/sainsburys-login` page reuses the same OAuth app, and GitHub scopes a redirect URI to sub-paths of the registered callback. Without it the MCP flow works and that page's sign-in fails |
 | `BROWSER_MCP_HOST` | `127.0.0.1`, unchanged |
 | claude.ai connector URL | `https://<tunnel-host>/mcp` |
 
@@ -192,9 +194,9 @@ libraries Chromium needed.
 - **`playwright install chromium` is not idempotent** and will report changed on
   every run. Guard it with `creates:` on the browser path, or an explicit
   `changed_when`.
-- **Do not template a `.env` file into the checkout.** `settings.py:27` reads
-  `.env` relative to the working directory, and `extra="forbid"` at
-  `settings.py:29` means one unrecognised `BROWSER_MCP_*` key fails at startup —
+- **Do not template a `.env` file into the checkout.** `Settings.model_config`
+  reads `.env` relative to the working directory, and its `extra="forbid"`
+  means one unrecognised `BROWSER_MCP_*` key fails at startup —
   which, under systemd restart, is a boot loop. Use a systemd `EnvironmentFile`
   owned by the service account at mode `0600`, outside the git tree. This is
   also what [`deployment.md` §5](deployment.md) asks for, and systemd
@@ -213,9 +215,9 @@ libraries Chromium needed.
 
 | Change | Location | Note |
 | --- | --- | --- |
-| Serve over HTTP | `BROWSER_MCP_TRANSPORT=http` | `settings.py:33` defaults to stdio; the `run` target in the `Makefile` is stdio-only |
+| Serve over HTTP | `BROWSER_MCP_TRANSPORT=http` | `Settings.transport` defaults to stdio; the `run` target in the `Makefile` is stdio-only |
 | Public OAuth base URL | `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` | Already supported; see [above](#what-the-tunnel-changes-about-authentication) |
-| Browser actions | `tools.py` | Currently only `server_info`; the deployment is untested against real browser work until these exist |
+| Browser actions | `tools.py` | Done: `sainsburys_products_we_love`, `sainsburys_search` and `sainsburys_add_to_basket`, all three run against the live site from this host |
 | Playbook | `deploy/` | Done: one app, one host — a second repository buys nothing at this size |
 
 Authentication needs no code change: it landed with SDR 0001.
@@ -226,8 +228,9 @@ Two gates worth noting:
   so `deploy/` would fall outside every gate in the README's quality table.
   Adding `ansible-lint` to `make check` would keep that standard consistent.
 - CI runs on x86 runners, so **arm64 is never exercised by CI**. Browser-launch
-  breakage will only ever appear on the Pi. A smoke-test target runnable there
-  is worth having once real actions exist.
+  breakage will only ever appear on the Pi. Now that real actions exist, a
+  smoke-test target runnable there is worth having; the manual path below is
+  the stopgap.
 
 ## Fast path: webhook-triggered code deploys
 
@@ -288,17 +291,35 @@ means it inherits one that's already there.
   Relevant only if a target site needs proprietary codecs or sniffs the brand.
 - **Uptime becomes an operational concern.** Connector calls fail whenever the
   Pi is off or offline.
-- **Headless detection.** If a target site blocks headless Chromium, the usual
-  escape hatch is `xvfb-run` with a headed browser.
+- **Headless detection, confirmed.** Sainsbury's (and Tesco, tested for
+  comparison) run Akamai Bot Manager, which blocks *headless* Chromium
+  specifically, regardless of network origin or user agent. So this host runs
+  a headed browser under a short-lived Xvfb display —
+  `browser_page(headless=False)`, and the `browser` role installs Xvfb for it.
+  Assume any large retailer does the same; see
+  [`site-automation-gotchas.md`](site-automation-gotchas.md).
 - **Single instance only.** Both the rate limiter and the token-verification
   cache are per-process. Do not scale this horizontally.
 
 ## Open questions
 
-- Which Pi 4 memory variant. 1GB would warrant revisiting the approach.
-- Whether `BROWSER_MCP_GITHUB_TOKEN_CACHE_SECONDS` should be shortened once the
-  server is reachable from the internet, trading GitHub API calls for a smaller
-  revocation window.
+Two of the original three were settled by building the thing, and are kept
+here with their answers rather than deleted:
+
+- ~~Which Pi 4 memory variant.~~ Settled when the host was built, against the
+  sizing above; whichever was chosen holds the server, one headed Chromium
+  under Xvfb and `cloudflared` at once, which is what one app needs. `zram` is
+  provisioned regardless (`roles/base`). The question that replaces it is a
+  fleet one — how many apps a host holds before memory decides — and that is
+  [`scaling-plan.md`](scaling-plan.md) D7.
+- ~~Whether `BROWSER_MCP_GITHUB_TOKEN_CACHE_SECONDS` should be shortened once
+  the server is reachable from the internet.~~ It is reachable, and the
+  default 300s stands: the cache is a revocation delay on a token that only
+  ever belongs to the one allowed account, so the window costs little and the
+  two GitHub API calls per request it saves are real.
+
+Still open:
+
 - Where the automated service's own credentials are stored and how they are
   refreshed when the session expires — still the largest unanswered piece, and
   the subject of [`deployment.md` §7](deployment.md).
