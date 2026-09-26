@@ -11,9 +11,12 @@
 # way, and the repository has a gitleaks gate, but neither is a reason to write
 # a plaintext secret into the tree in the first place.
 
-# GitHub OAuth app (https://github.com/settings/developers). Its callback URL
-# must be https://<mcp_public_hostname>/auth/callback — the loopback callback
-# in the README is for local development only.
+# GitHub OAuth app (https://github.com/settings/developers). It needs two
+# callback URLs: https://<mcp_public_hostname>/auth/callback for the MCP
+# endpoint, and https://<mcp_public_hostname>/sainsburys-login/auth/callback
+# for the login page, which reuses the same app. GitHub scopes a redirect URI
+# to sub-paths of the registered callback, so the second is not implied by the
+# first. The loopback callback in the README is for local development only.
 vault_mcp_github_client_id: Ov23liREPLACEME
 vault_mcp_github_client_secret: REPLACEME
 

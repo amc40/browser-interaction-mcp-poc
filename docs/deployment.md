@@ -6,12 +6,20 @@ it on a server breaks three of those assumptions at once — the network in fron
 of it is no longer trusted, the host is no longer only the operator's, and the
 process outlives the session that started it.
 
-**None of the following is implemented.** Until it is, http-on-loopback is the
-only configuration this repository supports. The list is ordered roughly by how
-badly each one bites.
+**None of this is implemented in the application code**, and the list is
+ordered roughly by how badly each one bites. Several items are nonetheless
+*answered by configuration* on the one host that runs this today — the
+Raspberry Pi provisioned by [`deploy/`](../deploy/README.md), described in
+[`pi-deployment.md`](pi-deployment.md).
+[`deploy/README.md`](../deploy/README.md#how-the-deployment-mitigations-land)
+maps each section to where the playbook lands it, and names the ones
+configuration cannot close because the code exposes no setting for them (§2,
+§3's signing key, §5's `LoadCredential`, §7, §9). Read that table alongside
+this one: the sections below still state what the *code* would need, which is
+why §1, §5 and §6 read as open here while being configured there.
 
-Two items that were originally on this list have since been done, and are noted
-here so the reasoning is not lost:
+Two items that were originally on this list have since been done in code, and
+are noted here so the reasoning is not lost:
 
 - **Identity is pinned to the GitHub numeric user ID**, not the login, because
   logins can be changed and a freed login can be registered by somebody else.
