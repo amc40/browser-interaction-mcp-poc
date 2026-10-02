@@ -26,7 +26,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "ruff", specifier = ">=0.14.4" },
-    { name = "types-authlib", specifier = ">=1.8.0" },
+    { name = "types-authlib", specifier = ">=1.8.0.20260911" },
 ]
 
 [[package]]
@@ -2037,8 +2037,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography", marker = "sys_platform != 'win32'" },
-    { name = "jeepney", marker = "sys_platform != 'win32'" },
+    { name = "cryptography" },
+    { name = "jeepney" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [
@@ -2126,14 +2126,14 @@ wheels = [
 
 [[package]]
 name = "types-authlib"
-version = "1.8.0.20260910"
+version = "1.8.0.20260911"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9a/52/023fb809f32fbb0c8e5fc7abd335b89a2bb8b91eae9023cb38f5926c51f3/types_authlib-1.8.0.20260910.tar.gz", hash = "sha256:2cb8c7f89b97276763659aefacc5479923d49cfb87703429f4fbeee9afbfbcf2", size = 51468, upload-time = "2026-09-10T06:45:39.363Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/d8/e78ecbe9a5a077f5ccfec1f284ace4e8ae55ce204ec8bd1b00d86a83974a/types_authlib-1.8.0.20260911.tar.gz", hash = "sha256:cde5e55bca5e908438facc8fc701197bf540af880dff7b8ca8cf40a08258a62a", size = 51835, upload-time = "2026-09-11T06:45:26.216Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/38/4b1bc5c69ffa67979b49d1f3017e8d67facd12be9b7690d5011faadefe66/types_authlib-1.8.0.20260910-py3-none-any.whl", hash = "sha256:fce4d7c5bdcfc9838128a24fb93bdde44568b0cd9a069cec9dff01acb52bd971", size = 110858, upload-time = "2026-09-10T06:45:38.418Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/65/d9206c38d65602867f15bda7836b1248295b31f3187a09cc1f6195539ebe/types_authlib-1.8.0.20260911-py3-none-any.whl", hash = "sha256:0617c4a2361a605144bae0850f70c18edd5265abec11af66235a02a1b415444e", size = 111525, upload-time = "2026-09-11T06:45:25.033Z" },
 ]
 
 [[package]]

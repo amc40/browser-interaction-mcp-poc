@@ -20,7 +20,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.14.4",
     # Authlib ships no type information of its own.
-    "types-authlib>=1.8.0",
+    "types-authlib>=1.8.0.20260911",
 ]
 
 # ---------------------------------------------------------------------------
