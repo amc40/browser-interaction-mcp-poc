@@ -52,10 +52,10 @@ a session at all. (It replaced an MCP-elicitation tool; Claude.ai's MCP
 client supports tool calls only.) See `login_routes.py`, `login_flow.py` and
 `login_steps.refresh_session`'s docstring in `packages/core/`, and the
 Sainsbury's `site.py` module docstring, for the full reasoning, and
-[`deploy/inventory/group_vars/browser_mcp/local.yml.example`](deploy/inventory/group_vars/browser_mcp/local.yml.example)
+[`fleet/inventory/group_vars/browser_mcp/local.yml.example`](fleet/inventory/group_vars/browser_mcp/local.yml.example)
 for how the one supporting setting this needs
 (`BROWSER_MCP_SAINSBURYS_USERNAME`) reaches the Pi without ever being
-committed - the same problem `mcp_public_hostname` already solved there.
+committed - the same way each app's public hostname is kept out.
 
 Its selectors aren't guesses: they were taken from a real Playwright codegen
 recording of a manual login and search-and-add flow, which also corrected
@@ -116,14 +116,15 @@ It runs as a claude.ai connector, on a Raspberry Pi behind a named Cloudflare
 Tunnel. The target, the options rejected on the way to it, and what that
 topology asks of the configuration are in
 [`docs/pi-deployment.md`](docs/pi-deployment.md); the Ansible playbook that
-provisions it is in [`deploy/`](deploy/README.md). A code-only change ships
-without re-running that playbook: GitHub Actions signs a request to a small
-webhook receiver on the Pi (`deploy_webhook.py`) once CI is green on `main`,
-which pulls, syncs and restarts itself — see
+provisions it, and every future app beside it, is in [`fleet/`](fleet/README.md).
+A code-only change ships without re-running that playbook: once CI is green on
+`main`, GitHub Actions signs a request to the webhook receiver
+(`deploy_webhook.py`) of each app the change affects, which pulls, syncs and
+restarts that app — see
 [`docs/pi-deployment.md`](docs/pi-deployment.md#fast-path-webhook-triggered-code-deploys)
 for the scope boundary against the playbook. Publishing anything other than
 `main` — a branch still under review, or arm64 behaviour CI never exercises —
-has no such network path at all: `deploy/deploy-branch.sh` does the same
+has no such network path at all: `fleet/deploy-branch.sh` does the same
 fetch/sync/restart for a named branch, but only runs by hand over SSH, see
 [`docs/pi-deployment.md`](docs/pi-deployment.md#manual-path-publishing-a-branch-over-ssh).
 
@@ -136,10 +137,11 @@ what the server runs.
 building it against the infrastructure that now exists.
 
 One site is a proof of concept; several is an architecture.
-[`docs/scaling-plan.md`](docs/scaling-plan.md) is the plan for that — a shared
-core library, a repo per site generated from a Playwright codegen recording,
-and a deployment where each app's files and process are owned by its own
-account, so an exposure in one cannot reach another's session. It folds in
+[`docs/scaling-plan.md`](docs/scaling-plan.md) is the plan for that — one
+workspace with a shared core and a package per site, generated from a
+Playwright codegen recording, and a deployment where each app's files and
+process are owned by its own accounts, so an exposure in one cannot reach
+another's session. It folds in
 what self-healing looks like across a fleet rather than one repository.
 
 ## Getting started
@@ -246,7 +248,8 @@ fact that shell access on the host bypasses all of this.
 | `packages/core/src/browser_mcp_core/login_steps.py` | The shape of a real login; a site supplies the steps |
 | `packages/core/src/browser_mcp_core/locator_table.py` | The row type for a site's locator table, and `resolve()` to turn a row into a Playwright locator |
 | `packages/core/src/browser_mcp_core/heal_surface.py` | CI's check that a `claude/heal-*` branch changes only one site's locator table and fixtures |
-| `packages/core/src/browser_mcp_core/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy on the Pi — not part of the running server |
+| `packages/core/src/browser_mcp_core/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy of one app — not part of the running server |
+| `packages/core/src/browser_mcp_core/deploy_targets.py` | CI's choice of which apps a push to `main` redeploys |
 | `packages/core/src/browser_mcp_core/auth.py` | Who may use the server: the OAuth provider and the login check |
 | `packages/core/src/browser_mcp_core/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
 | `packages/core/src/browser_mcp_core/redaction.py` | Keeping the server's own credentials out of logs and errors |
@@ -261,7 +264,7 @@ fact that shell access on the host bypasses all of this.
 | `docs/sdr/` | Design records for decisions worth their own argument |
 | `docs/deployment.md` | What would have to change before this runs on a server |
 | `docs/pi-deployment.md` | Where it is planned to run, and how it would get there |
-| `deploy/` | The Ansible playbook that provisions that host |
+| `fleet/` | The Ansible playbook that provisions every app in `fleet/apps.yml` onto the host it is assigned to |
 | `docs/self-healing.md` | Proposed mechanism for repairing stale selectors, and its limits |
 | `docs/self-healing-plan.md` | The staged plan for building it, and where the infrastructure has overtaken that design |
 | `docs/scaling-plan.md` | Architecture and staged plan for many sites: one workspace, a package per site, per-app isolation on the Pi |

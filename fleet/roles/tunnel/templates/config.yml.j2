@@ -1,0 +1,26 @@
+# Managed by Ansible (tunnel role) — local edits will be overwritten.
+#
+# This host's named tunnel, routing each app assigned to it in apps.yml. A
+# named tunnel on a domain you own, not a trycloudflare.com quick tunnel:
+# claude.ai stores each connector URL, so an ephemeral hostname would break
+# the connector on every restart.
+tunnel: {{ mcp_tunnel_id }}
+credentials-file: {{ tunnel_config_dir }}/{{ mcp_tunnel_id }}.json
+no-autoupdate: true
+metrics: {{ tunnel_metrics_address }}
+
+# The connection to Cloudflare's edge is outbound, so there is no port forward
+# and no inbound firewall rule, and the home IP never appears in DNS.
+ingress:
+{% for app in fleet_host_apps %}
+  # {{ app.key }}. The webhook rule comes first (first match wins), on the
+  # same hostname rather than a second one, so its deploy webhook needs no DNS
+  # record of its own.
+  - hostname: {{ fleet_hostnames[app.key] }}
+    path: ^/deploy-webhook$
+    service: http://127.0.0.1:{{ app.value.webhook_port }}
+  - hostname: {{ fleet_hostnames[app.key] }}
+    service: http://{{ mcp_bind_host }}:{{ app.value.port }}
+{% endfor %}
+  # Anything else that reaches this tunnel is not for us.
+  - service: http_status:404

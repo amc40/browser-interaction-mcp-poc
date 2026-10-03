@@ -1,0 +1,51 @@
+# Managed by Ansible (app role) — local edits will be overwritten.
+#
+# One instance per app: browser-mcp-deploy@<app>.service. Never enabled and
+# never started at boot — only triggered on demand by that app's webhook
+# (`sudo systemctl restart --no-block browser-mcp-deploy@<app>.service`), or
+# by hand for testing.
+[Unit]
+Description=browser MCP app %i deploy — pulls origin/main and restarts the app
+
+[Service]
+Type=oneshot
+User={{ fleet_deploy_user_prefix }}%i
+Group={{ fleet_deploy_user_prefix }}%i
+WorkingDirectory={{ fleet_opt_root }}/%i/checkout
+# Which uv, which caches, which package and which unit: deploy.env, written by
+# Ansible. fleet/deploy.sh lives in the checkout and is replaced by the very
+# reset it runs, so it takes all of that from here rather than hardcoding it.
+EnvironmentFile={{ fleet_config_root }}/%i/deploy.env
+ExecStart={{ fleet_opt_root }}/%i/checkout/fleet/deploy.sh
+# uv sync can be slow on a Pi 4.
+TimeoutStartSec=300
+
+# --- Sandboxing ------------------------------------------------------------
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# The app's checkout, venv, Python build and uv cache, all under its deploy
+# account's home. Not the shared browsers directory: no deploy account may
+# replace a browser another app runs (docs/scaling-plan.md D3).
+ReadWritePaths={{ fleet_opt_root }}/%i
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+UMask=0022
+
+# Deliberately absent:
+#   NoNewPrivileges, SystemCallFilter — same reasoning as
+#     browser-mcp-webhook@.service: this script's last step is also a sudo
+#     call (sudoers.j2), to restart the app.
+#   MemoryDenyWriteExecute — deploy.sh starts Playwright's bundled Node.js
+#     driver to check the browser it needs is installed, and V8 needs
+#     writable+executable pages for JIT to start at all. Confirmed on the real
+#     Pi (V8 Fatal Error in SetPermissions) when `playwright install` ran here.

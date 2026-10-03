@@ -1,0 +1,64 @@
+---
+# `--tags retire-legacy`, once the fleet's unit has served a real tool call:
+# removes the single-app deployment's units, sudoers rules and configuration.
+# Never its state, browsers, checkout or accounts - an Ansible task is the
+# wrong place to irreversibly delete the only copy of a logged-in session, so
+# those are listed for removing by hand.
+- name: Look for a completed cut-over
+  ansible.builtin.stat:
+    path: "{{ legacy_marker }}"
+  register: legacy_retire_marker
+
+- name: Assert the cut-over has happened
+  ansible.builtin.assert:
+    that:
+      - legacy_retire_marker.stat.exists
+    fail_msg: >-
+      There is no record of a cut-over on {{ inventory_hostname }}
+      ({{ legacy_marker }}), so the single-app deployment may still be the
+      one serving. Run site.yml with -e fleet_legacy_cutover=true first.
+    quiet: true
+
+- name: Stop and disable the single-app deployment's units
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - "{{ legacy_webhook_unit }}"
+    - "{{ legacy_app_unit }}"
+  # Already gone, on a second run.
+  failed_when: false
+
+- name: Remove the single-app deployment's units, sudoers rules and configuration
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ legacy_systemd_dir }}/{{ legacy_app_unit }}"
+    - "{{ legacy_systemd_dir }}/{{ legacy_webhook_unit }}"
+    - "{{ legacy_systemd_dir }}/{{ legacy_deploy_unit }}"
+    - /etc/sudoers.d/deploy-webhook
+    - /etc/deploy-webhook
+    - /etc/browser-interaction-mcp
+  register: legacy_retired
+
+- name: Reload systemd without the single-app deployment's units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when:
+    - legacy_retired.changed
+    - not ansible_check_mode
+
+- name: Report what is left to remove by hand
+  ansible.builtin.debug:
+    msg:
+      - "Its state, once you are sure nothing in it is needed:
+         sudo rm -rf {{ legacy_state_dir }}"
+      - "Its browsers, checkout and uv directories: sudo rm -rf
+         {{ legacy_browsers_dir }} /opt/browser-interaction-mcp /var/cache/uv
+         /opt/uv"
+      - "Its accounts: sudo userdel browsermcp && sudo userdel -r deploy"
+      - "In GitHub: once the {{ legacy_app }} environment holds its own
+         DEPLOY_WEBHOOK_URL and DEPLOY_WEBHOOK_SECRET, delete the
+         repository-level ones (fleet/README.md)."

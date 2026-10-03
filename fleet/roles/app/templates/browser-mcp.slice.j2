@@ -1,0 +1,14 @@
+# Managed by Ansible (app role) — local edits will be overwritten.
+#
+# Every app on this host runs in this slice. A headed Chromium under Xvfb is
+# 300-500MB, so a few apps launching one each is how a Pi gets OOM-killed - and
+# the process the kernel picks will not be the one that caused it. Each app's
+# own MemoryHigh (its drop-in, from apps.yml) applies reclaim pressure first;
+# this is the hard ceiling for all of them together. docs/scaling-plan.md D7.
+[Unit]
+Description=browser MCP apps
+Before=slices.target
+
+[Slice]
+MemoryAccounting=true
+MemoryMax={{ fleet_memory_budget_mb }}M

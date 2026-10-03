@@ -98,8 +98,8 @@ jobs:
 
   # A claude/heal-* branch may change one site's locators.py and test fixtures,
   # nothing else (see browser_mcp_core/heal_surface.py). Runs on every pull
-  # request and passes at once on any other branch, so it can be a required
-  # check. Not in `deploy`'s needs: it never runs on a push to main.
+  # request and passes at once on any other branch; the `ci` gate below
+  # requires it there and ignores it on a push to main, where it is skipped.
   heal-surface:
     name: heal surface
     if: github.event_name == 'pull_request'
@@ -129,6 +129,21 @@ jobs:
           git show "$BASE_SHA:$source" > "$checker"
           python3 "$checker" --branch "$HEAD_REF" --base "$BASE_SHA"
 
+  # The fleet's Ansible, which none of the Python gates can see: ansible-lint,
+  # a syntax check, and a render of every template against a two-host sample
+  # fleet (fleet/tests/render.yml). Through make, so CI and a laptop pin the
+  # same versions.
+  fleet:
+    name: fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - run: make fleet
+
   build:
     name: build
     runs-on: ubuntu-latest
@@ -145,25 +160,90 @@ jobs:
           uv build --all-packages
           uvx twine check --strict dist/*
 
-  # Fast path for a code-only change: notify the Pi's webhook receiver
-  # (deploy_webhook.py, via the Cloudflare Tunnel it's already reachable
-  # through - see docs/pi-deployment.md) once every other job on this push has
-  # passed. `needs:` on all of them, not a separate `workflow_run` trigger, is
-  # what makes "only after CI is green" a property of this one workflow run
-  # rather than something a second workflow has to re-derive.
-  deploy:
-    name: deploy
+  # The one check branch protection needs to require: it passes only when every
+  # other job passed or was skipped (heal-surface is, on a push), so adding a
+  # job never means editing the protection rules too.
+  gate:
+    name: ci
     runs-on: ubuntu-latest
-    needs: [quality, lockfile, test, workflows, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [quality, lockfile, test, workflows, heal-surface, fleet, build]
+    if: always()
     timeout-minutes: 2
     steps:
-      - name: Notify the Pi to deploy
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          jq -e 'all(.[]; . == "success" or . == "skipped")' <<< "$RESULTS"
+
+  # Fast path for a code-only change: once everything else on a push to main has
+  # passed, notify the webhook receiver of each app the push affects - via the
+  # Cloudflare Tunnel of the host that app runs on (see fleet/README.md). A
+  # change to one site's package redeploys that app; a change to core, the
+  # lockfile or the deploy script redeploys every app; docs, tests, CI and the
+  # fleet's Ansible redeploy nothing (browser_mcp_core/deploy_targets.py).
+  deploy-targets:
+    name: deploy targets
+    runs-on: ubuntu-latest
+    needs: [gate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 5
+    outputs:
+      apps: ${{ steps.targets.outputs.apps }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The commit main pointed at before the push has to be in the clone.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - name: Work out which apps the push affects
+        id: targets
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          # No project is involved, so there is no lockfile to be frozen to.
+          UV_FROZEN: "false"
+        # apps.yml is YAML, which the runner's python3 cannot read, so a pinned
+        # PyYAML turns each app's package into JSON for the stdlib-only script.
+        run: |
+          apps=$(uv run --no-project --with pyyaml==6.0.3 python -c \
+            'import json, yaml; print(json.dumps({a: s["package"] for a, s in yaml.safe_load(open("fleet/apps.yml"))["apps"].items()}))')
+          targets=$(python3 packages/core/src/browser_mcp_core/deploy_targets.py \
+            --apps "$apps" --base "$BEFORE_SHA" --head "$AFTER_SHA")
+          echo "Redeploying: $targets"
+          echo "apps=$targets" >> "$GITHUB_OUTPUT"
+
+  # One job per app, each in the GitHub environment named after the app, which
+  # holds that app's own DEPLOY_WEBHOOK_URL and DEPLOY_WEBHOOK_SECRET - every
+  # app's receiver has its own secret (docs/scaling-plan.md D5). An environment
+  # without them falls back to repository secrets of the same names, which is
+  # what keeps the single-app deployment's working through the cut-over; see
+  # fleet/README.md for moving them into the environment afterwards.
+  deploy:
+    name: deploy ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: [deploy-targets]
+    if: needs.deploy-targets.outputs.apps != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.deploy-targets.outputs.apps) }}
+    environment: ${{ matrix.app }}
+    timeout-minutes: 2
+    steps:
+      - name: Notify ${{ matrix.app }}'s host to deploy it
         env:
           DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
           DEPLOY_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
           DEPLOY_SHA: ${{ github.sha }}
+          APP: ${{ matrix.app }}
         run: |
+          if [ -z "$DEPLOY_URL" ] || [ -z "$DEPLOY_WEBHOOK_SECRET" ]; then
+            echo "::error::The $APP environment has no DEPLOY_WEBHOOK_URL or DEPLOY_WEBHOOK_SECRET; see fleet/README.md."
+            exit 1
+          fi
           body=$(jq -nc --arg sha "$DEPLOY_SHA" '{sha: $sha, ref: "refs/heads/main"}')
           signature="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$DEPLOY_WEBHOOK_SECRET" -r | cut -d' ' -f1)"
           curl --fail-with-body --max-time 10 --silent --show-error \

@@ -9,9 +9,9 @@ process outlives the session that started it.
 **None of this is implemented in the application code**, and the list is
 ordered roughly by how badly each one bites. Several items are nonetheless
 *answered by configuration* on the one host that runs this today — the
-Raspberry Pi provisioned by [`deploy/`](../deploy/README.md), described in
+Raspberry Pi provisioned by [`fleet/`](../fleet/README.md), described in
 [`pi-deployment.md`](pi-deployment.md).
-[`deploy/README.md`](../deploy/README.md#how-the-deployment-mitigations-land)
+[`fleet/README.md`](../fleet/README.md#how-the-deployment-mitigations-land)
 maps each section to where the playbook lands it, and names the ones
 configuration cannot close because the code exposes no setting for them (§2,
 §3's signing key, §5's `LoadCredential`, §7, §9). Read that table alongside

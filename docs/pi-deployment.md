@@ -1,7 +1,7 @@
 # Deploying to a Raspberry Pi as a claude.ai connector
 
 **Status: running.** The provisioning playbook this document specifies is in
-[`deploy/`](../deploy/README.md) and provisions the real host serving
+[`fleet/`](../fleet/README.md) and provisions the real host serving
 `browser-interaction-mcp` to claude.ai today.
 
 [`deployment.md`](deployment.md) lists *what must change* before this runs on a
@@ -138,8 +138,8 @@ Further notes specific to this board:
   rather than on an NVMe HAT. An always-on Chromium writes to its profile and
   cache constantly, which is what kills SD cards, so getting off it eventually
   matters — but it doesn't have to happen before the server can run. The
-  playbook in `deploy/` starts on the SD card by default and migrates onto an
-  SSD once one exists; see [`deploy/README.md`](../deploy/README.md#two-phases-sd-card-first-ssd-later).
+  playbook in `fleet/` starts on the SD card by default and migrates onto an
+  SSD once one exists; see [`fleet/README.md`](../fleet/README.md#two-phases-sd-card-first-ssd-later).
   Prefer a powered enclosure, or the official 3A PSU, whenever the SSD arrives.
 - **Cooling.** The Cortex-A72 throttles around 80 °C and the Pi 4 reaches it
   under sustained load in a closed case. Chromium rendering is exactly that load
@@ -153,7 +153,7 @@ Further notes specific to this board:
 
 ## Provisioning with Ansible
 
-The playbook implementing this section is in [`deploy/`](../deploy/README.md),
+The playbook implementing this section is in [`fleet/`](../fleet/README.md),
 which also records the two ordering-driven departures from the role table below
 and the mitigations no playbook can apply until the code exposes them.
 
@@ -164,7 +164,7 @@ Ansible's target-side requirement; that is coincidentally the same version the
 application needs, but unrelated in practice, since `uv` fetches its own
 standalone arm64 build rather than using the system interpreter. An older
 bookworm image (Python 3.11) still satisfies Ansible's requirement too, but see
-[`deploy/roles/browser/vars/main.yml`](../deploy/roles/browser/vars/main.yml)
+[`fleet/roles/browser/vars/main.yml`](../fleet/roles/browser/vars/main.yml)
 for the apt package names that change between the two.
 
 The justification for automating a single host is recovery: when the SD card
@@ -218,15 +218,15 @@ libraries Chromium needed.
 | Serve over HTTP | `BROWSER_MCP_TRANSPORT=http` | `Settings.transport` defaults to stdio; the `run` target in the `Makefile` is stdio-only |
 | Public OAuth base URL | `BROWSER_MCP_GITHUB_OAUTH_BASE_URL` | Already supported; see [above](#what-the-tunnel-changes-about-authentication) |
 | Browser actions | `tools.py` | Done: `sainsburys_products_we_love`, `sainsburys_search` and `sainsburys_add_to_basket`, all three run against the live site from this host |
-| Playbook | `deploy/` | Done: one app, one host — a second repository buys nothing at this size |
+| Playbook | `fleet/` | Done, and since made plural: every app in `fleet/apps.yml`, on the host it is assigned to (docs/scaling-plan.md stage 3) |
 
 Authentication needs no code change: it landed with SDR 0001.
 
 Two gates worth noting:
 
-- `mypy` is scoped to `files = ["src", "tests"]` and ruff only inspects Python,
-  so `deploy/` would fall outside every gate in the README's quality table.
-  Adding `ansible-lint` to `make check` would keep that standard consistent.
+- `mypy` and ruff only inspect Python, so `make check` runs `make fleet` for
+  the playbook: ansible-lint at the production profile, a syntax check, and a
+  render of every template against a sample fleet. CI runs it too.
 - CI runs on x86 runners, so **arm64 is never exercised by CI**. Browser-launch
   breakage will only ever appear on the Pi. Now that real actions exist, a
   smoke-test target runnable there is worth having; the manual path below is
@@ -239,16 +239,16 @@ packages, systemd unit changes, tunnel config — but heavy for "one Python
 file changed, ship it," and it needs someone's laptop, the vault password and
 the become password every time. `deploy_webhook.py`
 (`packages/core/src/browser_mcp_core/`) is a small, dependency-free receiver the
-`deploy_webhook` role installs as its own long-lived systemd service: GitHub
+`app` role installs, one per app, as its own long-lived systemd service: GitHub
 Actions HMAC-signs a request naming the commit that just passed CI on `main`
 and POSTs it to `https://<host>/deploy-webhook` — a second, path-scoped
 ingress rule on the *same* tunnel and hostname, so no new DNS record or
 inbound port is involved either. On a valid signature for `refs/heads/main`
 it starts a second, oneshot unit that does the actual
-`git reset --hard origin/main` → `uv sync --frozen --no-dev` →
-`playwright install chromium` → restart sequence (`deploy/deploy.sh`), running
-as a dedicated `deploy` account that owns the checkout outright rather than
-via any elevation.
+`git reset --hard` to `main` → `uv sync --frozen --no-dev --package` → browser
+check → restart sequence (`fleet/deploy.sh`), running as that app's own deploy
+account, which owns the checkout outright rather than via any elevation. CI
+signs one such request per app the push affects.
 
 Deliberately narrow: this path only ever does what a code-only change needs.
 It cannot install a new apt package, change a systemd unit, or touch the
@@ -262,17 +262,18 @@ gated by an HMAC signature — deliberately, since it is triggered by CI with
 nobody watching. That leaves no way to run something else on the real
 hardware first: a branch still under review, or the arm64-specific failures
 CI structurally
-[cannot exercise](#repository-changes-required). `deploy/deploy-branch.sh`
+[cannot exercise](#repository-changes-required). `fleet/deploy-branch.sh`
 covers that gap the same way `deploy.sh` covers `main` — fetch, hard-reset,
-`uv sync`, `playwright install`, restart — but for whichever branch is named
+`uv sync`, restart — but for one app, and whichever branch is named
 on its command line, and with **no** network path to it at all: no webhook
 route, no MCP tool, no cron job, nothing except an operator who already has
 an SSH session and sudo on the box running it by hand
-(`sudo -u deploy .../deploy-branch.sh <branch>`). It refuses to run against
+(`sudo -u bmcpd-<app> .../deploy-branch.sh <branch>`). It refuses to run against
 `main` itself, since that branch already has a path with a CI gate and a
-signature and this one has neither. See `deploy/README.md`'s own section on
+signature and this one has neither. See `fleet/README.md`'s own section on
 it for the exact invocation and the sudoers rule it reuses — no new one is
-needed, since it asks `deploy` for nothing `deploy.sh` doesn't already have.
+needed, since it asks the app's deploy account for nothing `deploy.sh` doesn't
+already have.
 
 The authorisation model here is intentionally the blunt one: unlike the
 webhook (a shared secret) or the MCP server itself (GitHub OAuth pinned to

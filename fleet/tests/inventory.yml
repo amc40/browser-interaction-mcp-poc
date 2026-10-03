@@ -1,0 +1,12 @@
+---
+# The hosts render.yml renders for: never contacted, every task runs locally.
+# `pi` matches apps.yml, so the real fleet can be validated as it is; `pi-02`
+# lets the sample fleet in render.yml span two hosts.
+browser_mcp:
+  vars:
+    ansible_connection: local
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    fleet_memory_budget_mb: 3072
+  hosts:
+    pi:
+    pi-02:

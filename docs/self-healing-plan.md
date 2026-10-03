@@ -80,7 +80,7 @@ human attention:
 
 Where an end-to-end check is wanted before a heal goes live, the existing manual
 path is the better instrument and needs no new machinery: publish the heal
-branch to the Pi with `deploy/deploy-branch.sh` and run the failing tool once
+branch to the Pi with `fleet/deploy-branch.sh` and run the failing tool once
 against the real site *before* merging. That tests the thing snapshot replay
 structurally cannot — the design is explicit that only the operator running it
 for real establishes end-to-end behaviour — for the same effort as clicking an
@@ -423,7 +423,7 @@ session has neither, and can be configured so it never can.
   to the PR, so the picture arrives where the review happens rather than as a
   file someone has to go and find. Stage 2 is therefore a hard prerequisite for
   stage 3, not a nice-to-have alongside it.
-- Before merging: publish the branch to the Pi with `deploy/deploy-branch.sh`
+- Before merging: publish the branch to the Pi with `fleet/deploy-branch.sh`
   and run the failing tool once against the real site. This is the end-to-end
   check, in place of a deploy gate, and it is a habit worth forming here while
   the volume is one PR. It needs the laptop, and it is the one step that should.

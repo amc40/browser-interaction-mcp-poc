@@ -1,0 +1,43 @@
+---
+# Every app in the fleet, and the one place that says where it runs. One entry
+# per site package under packages/; site.yml provisions, on each host, exactly
+# the apps whose `host` is that host's inventory name. See
+# docs/scaling-plan.md "The shape", D7 and D9.
+#
+# Adding a site is a package under packages/, an entry here, the app's public
+# hostname in local.yml, and a playbook run. Every entry is checked by
+# tasks/validate_apps.yml before anything is changed.
+#
+#   host            Inventory name of the one host that runs it. Never two:
+#                   the rate limiter, the token cache and the site session are
+#                   all per process (D9).
+#   package         The directory under packages/. The distribution it syncs
+#                   is browser-mcp-<package>.
+#   console_script  The entry point that package's pyproject.toml declares.
+#   port            Loopback port of the MCP server.
+#   webhook_port    Loopback port of the app's own deploy webhook receiver.
+#                   Both ports are unique across the whole fleet, not just per
+#                   host, so moving an app between hosts never renumbers it.
+#   headed          Whether any of its actions launch a headed browser, which
+#                   is what costs the Xvfb display and the extra memory (D7).
+#   memory_high_mb  Its systemd MemoryHigh. The apps on one host must fit in
+#                   that host's fleet_memory_budget_mb (hosts.yml).
+#   settings        Extra BROWSER_MCP_* settings, without the prefix. In a
+#                   value, {state_dir} stands for the app's own state
+#                   directory. Anything tied to a real person goes in
+#                   local.yml's app_settings instead, which is merged over
+#                   this.
+apps:
+  sainsburys:
+    host: pi
+    package: sainsburys
+    console_script: browser-interaction-mcp
+    # The ports the single-app deployment used, kept so the cut-over changes
+    # no tunnel ingress and a rollback is just starting the old unit again.
+    port: 8000
+    webhook_port: 8787
+    # Akamai Bot Manager blocks headless Chromium on this site.
+    headed: true
+    memory_high_mb: 1024
+    settings:
+      SAINSBURYS_STORAGE_STATE_PATH: "{state_dir}/sainsburys_storage_state.json"

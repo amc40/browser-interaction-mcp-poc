@@ -363,9 +363,9 @@ design spends its length keeping away from it. The repository already runs
 | Heal workflow | `.github/workflows/` | Diff-surface check, replay, `make check`, PR creation |
 | Branch ruleset and a scoped app token | Repository settings | Not code, and the load-bearing half of I2 |
 
-Two existing constraints carry over unchanged: `deploy/` would sit outside every
-quality gate unless linted deliberately, and CI never exercises arm64, so
-anything that only breaks on the Pi still only surfaces on the Pi.
+Two existing constraints carry over: CI lints and renders `fleet/`
+(`make fleet`) but never runs it against a real host, and CI never exercises
+arm64, so anything that only breaks on the Pi still only surfaces on the Pi.
 
 ## Open questions
 

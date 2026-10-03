@@ -38,6 +38,6 @@ class SainsburysSettings(CoreSettings):
         "not because a username grants access on its own, but so redaction.py "
         "covers it automatically like every other credential. Personal enough "
         "that it shouldn't go in a public git history even encrypted - see "
-        "deploy/inventory/group_vars/browser_mcp/local.yml.example for how the "
+        "fleet/inventory/group_vars/browser_mcp/local.yml.example for how the "
         "deployment keeps it out.",
     )

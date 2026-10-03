@@ -1,0 +1,33 @@
+---
+# Only the uv binary, once per host. Each app's checkout, Python build, cache
+# and venv are that app's own, owned by its deploy account - roles/app.
+- name: Read the installed uv version
+  ansible.builtin.command: "{{ uv_install_dir }}/uv --version"
+  register: uv_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install uv
+  when: uv_installed.rc != 0 or uv_version not in uv_installed.stdout
+  block:
+    - name: Download the pinned uv installer
+      ansible.builtin.get_url:
+        url: https://astral.sh/uv/{{ uv_version }}/install.sh
+        dest: /root/uv-install-{{ uv_version }}.sh
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Run the uv installer
+      ansible.builtin.command: /root/uv-install-{{ uv_version }}.sh
+      environment:
+        UV_INSTALL_DIR: "{{ uv_install_dir }}"
+        INSTALLER_NO_MODIFY_PATH: "1"
+      register: uv_install
+      changed_when: uv_install.rc == 0
+  always:
+    - name: Remove the installer
+      ansible.builtin.file:
+        path: /root/uv-install-{{ uv_version }}.sh
+        state: absent

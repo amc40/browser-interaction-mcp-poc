@@ -1,0 +1,125 @@
+---
+# Checks apps.yml, and what local.yml says about the apps, before site.yml
+# changes anything. Also run by tests/render.yml in CI, so a malformed entry
+# fails the pull request that adds it rather than the playbook run after it.
+
+# local.yml before the fleet layer named the one app's hostname and username
+# directly. Left as they were, every app would silently get no hostname.
+- name: Assert local.yml uses the per-app names
+  ansible.builtin.assert:
+    that:
+      - mcp_public_hostname is not defined
+      - mcp_sainsburys_username is not defined
+    fail_msg: >-
+      local.yml still sets mcp_public_hostname or mcp_sainsburys_username,
+      from before the fleet layer. Replace them with app_hostnames.sainsburys
+      and app_settings.sainsburys.SAINSBURYS_USERNAME - see local.yml.example.
+    quiet: true
+
+- name: Assert apps.yml names at least one app
+  ansible.builtin.assert:
+    that:
+      - apps is mapping
+      - apps | length > 0
+    fail_msg: apps.yml must map each app's name to its settings.
+    quiet: true
+
+# The name becomes two account names (bmcpd-<app> is the longer), a systemd
+# instance name and a path component, so it is held to what is safe in all of
+# them. useradd allows 32 characters.
+- name: Assert every app is fully and validly described
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[a-z][a-z0-9-]{0,19}[a-z0-9]$')
+      - item.value.host is string
+      - item.value.package is string
+      - item.value.package is match('^[a-z][a-z0-9_-]*$')
+      - (fleet_repo_root ~ '/packages/' ~ item.value.package ~ '/pyproject.toml') is file
+      - item.value.package != 'core'
+      - item.value.console_script is string
+      - item.value.console_script is match('^[A-Za-z0-9_.-]+$')
+      - item.value.port is integer
+      - item.value.webhook_port is integer
+      - item.value.port > 1024 and item.value.port < 65536
+      - item.value.webhook_port > 1024 and item.value.webhook_port < 65536
+      - item.value.headed is boolean
+      - item.value.memory_high_mb is integer
+      - item.value.memory_high_mb > 0
+      - (item.value.settings | default({})) is mapping
+      - (item.value.settings | default({}) | list | reject('match', '^[A-Z][A-Z0-9_]*$') | list) == []
+      - ((app_settings | default({}))[item.key] | default({})) is mapping
+      - ((app_settings | default({}))[item.key] | default({}) | list | reject('match', '^[A-Z][A-Z0-9_]*$') | list) == []
+    fail_msg: >-
+      apps.yml's entry for {{ item.key }} is incomplete or invalid. See the
+      comment at the top of apps.yml for what each key must be; the name must be
+      lower-case letters, digits and hyphens, 2 to 21 characters, and the
+      package must be a directory under packages/ other than core.
+    quiet: true
+  loop: "{{ apps | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Assert every app runs on a host in the inventory
+  ansible.builtin.assert:
+    that:
+      - item.value.host in groups['browser_mcp']
+    fail_msg: >-
+      {{ item.key }} is assigned to host {{ item.value.host }}, which is not in
+      the browser_mcp group in inventory/hosts.yml.
+    quiet: true
+  loop: "{{ apps | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# Unique across the fleet rather than per host, so that moving an app between
+# hosts never needs a port renumbered alongside it.
+- name: Assert no two apps share a port
+  vars:
+    validate_ports: >-
+      {{ (apps | dict2items | map(attribute='value.port') | list)
+         + (apps | dict2items | map(attribute='value.webhook_port') | list) }}
+  ansible.builtin.assert:
+    that:
+      - validate_ports | unique | length == validate_ports | length
+    fail_msg: >-
+      Two apps, or one app's server and webhook, share a port:
+      {{ validate_ports | sort | join(', ') }}. Every port in apps.yml must be
+      unique across the fleet.
+    quiet: true
+
+# claude.ai stores each connector's URL, so a hostname has to be stable and has
+# to be a real name rather than the `<app>.` fallback with no fleet_domain.
+- name: Assert every app has a public hostname
+  ansible.builtin.assert:
+    that:
+      - fleet_hostnames[item] is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$')
+    fail_msg: >-
+      {{ item }} has no usable public hostname ({{ fleet_hostnames[item] }}). Set
+      app_hostnames.{{ item }}, or fleet_domain, in local.yml - see
+      local.yml.example.
+    quiet: true
+  loop: "{{ apps | list }}"
+
+- name: Assert no two apps share a hostname
+  ansible.builtin.assert:
+    that:
+      - fleet_hostnames.values() | unique | length == fleet_hostnames | length
+    fail_msg: "Two apps share a public hostname: {{ fleet_hostnames }}"
+    quiet: true
+
+# Memory is what decides how many apps a host can hold (docs/scaling-plan.md D7,
+# D9). Refused here rather than discovered as an OOM kill at 3am.
+- name: Assert this host's apps fit in its memory budget
+  vars:
+    validate_memory_mb: "{{ fleet_host_apps | map(attribute='value.memory_high_mb') | sum }}"
+  ansible.builtin.assert:
+    that:
+      - fleet_memory_budget_mb is defined
+      - validate_memory_mb | int <= fleet_memory_budget_mb | int
+    fail_msg: >-
+      The apps assigned to {{ inventory_hostname }} ({{ fleet_host_apps |
+      map(attribute='key') | join(', ') }}) have memory_high_mb summing to
+      {{ validate_memory_mb }}, over its fleet_memory_budget_mb of
+      {{ fleet_memory_budget_mb | default('(unset)') }} in inventory/hosts.yml.
+      Move an app to another host, or lower one's memory_high_mb.
+    quiet: true

@@ -1,0 +1,34 @@
+---
+# Once per host, before any app is prepared: the template units every app is
+# an instance of, the slice they all run in, and the two directories every
+# app's own lives under.
+- name: Create the fleet's checkout and configuration roots
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ fleet_opt_root }}"
+    - "{{ fleet_config_root }}"
+
+- name: Install the shared systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - browser-mcp.slice
+    - browser-mcp@.service
+    - browser-mcp-webhook@.service
+    - browser-mcp-deploy@.service
+  register: app_shared_units
+
+# A change to a template unit changes every instance of it, so every app on the
+# host restarts - see start.yml.
+- name: Note whether the shared units changed
+  ansible.builtin.set_fact:
+    app_shared_units_changed: "{{ app_shared_units.changed }}"

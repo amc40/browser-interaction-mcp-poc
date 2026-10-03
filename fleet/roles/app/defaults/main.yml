@@ -1,0 +1,8 @@
+---
+# Restart on failure, but give up after a few attempts in a short window. A
+# settings error is fatal at startup by design (unknown BROWSER_MCP_* keys are
+# rejected), and without a limit that becomes a restart loop rather than a
+# service that is visibly, diagnosably dead.
+app_restart_sec: 5
+app_start_limit_interval_sec: 300
+app_start_limit_burst: 5

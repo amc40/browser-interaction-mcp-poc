@@ -1,0 +1,14 @@
+---
+# What any app's Chromium needs from the host. The browsers themselves are
+# downloaded by install.yml, once every app's venv exists to say which
+# Playwright, and so which browser build, each one needs.
+- name: Install Chromium's shared library dependencies
+  ansible.builtin.apt:
+    name: "{{ browser_apt_packages }}"
+    state: present
+
+- name: Install xvfb
+  ansible.builtin.apt:
+    name: xvfb
+    state: present
+  when: browser_install_xvfb | bool

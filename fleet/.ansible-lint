@@ -1,0 +1,10 @@
+---
+profile: production
+
+exclude_paths:
+  - .ansible/
+  - collections/
+
+# The roles are local to this repository rather than Galaxy-published.
+skip_list:
+  - galaxy  # no galaxy.yml: these roles are not published anywhere

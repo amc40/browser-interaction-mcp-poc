@@ -1,0 +1,77 @@
+---
+# Included from main.yml only under `--tags migrate`, and only when
+# storage_mount_ssd is true - by which point the tasks above it have already
+# mounted the SSD at fleet_ssd_mountpoint. Self-contained, since a
+# tags-filtered run executes only what's tagged `migrate`.
+#
+# Moves Phase 1's SD-card state onto the SSD: every app's state, under the
+# fleet's state root, and the shared browsers. (Moving the single-app
+# deployment's state into the fleet layout is a different copy, roles/legacy.)
+- name: Install rsync
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+
+- name: Check whether Phase 1's SD-card state still exists
+  ansible.builtin.stat:
+    path: "{{ item.src }}"
+  loop:
+    - src: "{{ fleet_sd_state_root }}"
+      dest: "{{ fleet_ssd_mountpoint }}/browser-mcp"
+    - src: "{{ fleet_sd_browsers_dir }}"
+      dest: "{{ fleet_ssd_mountpoint }}/browser-mcp-playwright"
+  loop_control:
+    label: "{{ item.src }}"
+  register: storage_migrate_paths
+
+- name: Report there is nothing to migrate
+  ansible.builtin.debug:
+    msg: >-
+      Nothing found at {{ fleet_sd_state_root }} or {{ fleet_sd_browsers_dir }} -
+      either this host went straight to Phase 2, or migration already ran.
+  when: storage_migrate_paths.results | selectattr('stat.exists') | list | length == 0
+
+# Each app keeps a live browser session and an OAuth token store in the state
+# it's about to have copied out from under it (docs/deployment.md §7);
+# stopping them first avoids copying either mid-write.
+- name: Migrate the SD-card state onto the SSD
+  when: storage_migrate_paths.results | selectattr('stat.exists') | list | length > 0
+  block:
+    - name: Stop the apps before copying their state
+      ansible.builtin.systemd_service:
+        name: browser-mcp@{{ item.key }}.service
+        state: stopped
+      loop: "{{ fleet_host_apps }}"
+      loop_control:
+        label: "{{ item.key }}"
+      # Absent on a host that jumps straight from nothing to Phase 2 without
+      # ever having run Phase 1 first - nothing to stop, and that's fine.
+      failed_when: false
+
+    - name: Copy the SD-card state onto the SSD
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - -aHAX
+          - "{{ item.item.src }}/"
+          - "{{ item.item.dest }}/"
+      loop: "{{ storage_migrate_paths.results }}"
+      loop_control:
+        label: "{{ item.item.src }} -> {{ item.item.dest }}"
+      when: item.stat.exists
+      changed_when: true
+
+    # Deliberately not deleted here: an Ansible task is the wrong place for an
+    # irreversible removal of the only copy of a live, authenticated browser
+    # profile. The operator confirms it works, then removes it by hand.
+    - name: Report what to do next
+      ansible.builtin.debug:
+        msg:
+          - "Copied onto the SSD. The SD-card copies at {{ fleet_sd_state_root }}
+             and {{ fleet_sd_browsers_dir }} were left in place, not deleted."
+          - "Now run: ansible-playbook site.yml --ask-become-pass
+             --ask-vault-pass (no --tags) to point everything at the SSD and
+             restart the apps."
+          - "Once you've confirmed every app works from the SSD (systemctl
+             status 'browser-mcp@*', and a real tool call from claude.ai),
+             remove the SD-card copies by hand."

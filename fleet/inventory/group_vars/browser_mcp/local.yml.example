@@ -1,0 +1,36 @@
+---
+# Copy to local.yml (gitignored, unlike this file) and fill in with values in
+# this deployment that are tied to a real person rather than the server.
+# Neither is a secret exactly - neither grants access to anything on its own -
+# but both are personal enough that they don't belong in a public git history
+# either, encrypted or not.
+#
+#   cp local.yml.example local.yml
+#   $EDITOR local.yml
+#
+# Ansible merges every file under group_vars/browser_mcp/ automatically, the
+# same way it already merges vars.yml and vault.yml, so nothing else needs to
+# change.
+
+# Each app's public hostname, on a domain you own and route through that app's
+# host's named tunnel. claude.ai stores the connector URL, so changing one
+# means re-adding that connector. An app missing here falls back to
+# <app>.<fleet_domain>, if fleet_domain is set.
+app_hostnames:
+  sainsburys: sainsburys.mcp.example.com
+
+# fleet_domain: mcp.example.com
+
+# The Cloudflare zone the hostnames above are in. Only needed when
+# vault_cloudflare_api_token is set, so the playbook creates each app's DNS
+# record itself rather than printing the command to.
+# fleet_cloudflare_zone: example.com
+
+# Per-app BROWSER_MCP_* settings that are tied to a real person, without the
+# prefix. Merged over the app's `settings` in apps.yml.
+app_settings:
+  sainsburys:
+    # The Sainsbury's account the /sainsburys-login page types into the real
+    # login form. Setting it is also what makes that page be served, so leave
+    # it out until that flow is set up.
+    SAINSBURYS_USERNAME: you@example.com

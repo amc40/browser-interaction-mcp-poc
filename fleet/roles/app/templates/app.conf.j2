@@ -1,0 +1,10 @@
+# Managed by Ansible (app role) — local edits will be overwritten.
+#
+# What makes browser-mcp@{{ app.key }}.service this app rather than another:
+# the rest of the unit is shared, in browser-mcp@.service.
+[Service]
+# Run directly rather than through `uv run`, so nothing needs uv, a network or
+# a writable checkout at runtime.
+ExecStart={{ app_checkout_dir }}/.venv/bin/{{ app.value.console_script }}
+# Reclaim pressure above this, inside the slice's hard ceiling. apps.yml.
+MemoryHigh={{ app.value.memory_high_mb }}M

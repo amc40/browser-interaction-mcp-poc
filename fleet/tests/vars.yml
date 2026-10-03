@@ -1,0 +1,19 @@
+---
+# Stand-ins for what vault.yml and local.yml hold on a real control node.
+# Nothing here is a credential.
+vault_mcp_github_client_id: Ov23liTEST
+vault_mcp_github_client_secret: test-client-secret
+vault_mcp_tunnel_id: 11111111-2222-3333-4444-555555555555
+vault_mcp_tunnel_credentials:
+  AccountTag: test
+  TunnelID: 11111111-2222-3333-4444-555555555555
+  TunnelName: test
+  TunnelSecret: test
+
+app_hostnames:
+  sainsburys: sainsburys.mcp.example.test
+fleet_domain: mcp.example.test
+app_settings:
+  sainsburys:
+    SAINSBURYS_USERNAME: someone@example.test
+fleet_repo_root: "{{ playbook_dir | dirname | dirname }}"
