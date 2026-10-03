@@ -44,18 +44,17 @@ updates:
     ignore:
       - dependency-name: "browser-mcp-*"
     groups:
-      # Intended as one PR for all the tooling, with runtime dependencies kept
-      # separate so a failing linter bump never blocks a security patch to a
-      # runtime package. For uv it currently matches nothing: Dependabot
-      # classifies every uv dependency as production, `dependency-groups`
-      # included (dependabot-core#13202, open), so each dev tool gets its own
-      # PR. The separation still holds - nothing is grouped at all.
+      # One PR for all the tooling, but runtime dependencies stay separate so a
+      # failing linter bump never blocks a security patch to a runtime package.
+      # It does match here: #38 bumped ruff through this group, classified
+      # `direct:development`. (dependabot-core#13202 reports uv treating every
+      # dependency as production; that is not what this repository sees.)
       #
-      # Kept rather than removed so it starts working when #13202 is fixed.
-      # When it does, a grouped bump can rewrite a similarly named line
-      # (dependabot-core#15558: `pytest` next to `pytest-asyncio` and
-      # `pytest-cov` is that shape here). The manifest and `uv.lock` then
-      # disagree, which the `lockfile` CI job's `uv lock --check` fails on.
+      # Grouping means a grouped bump can rewrite a similarly named line
+      # (dependabot-core#15558): `pytest` next to `pytest-asyncio` and
+      # `pytest-cov` is that shape here. It needs a bump that edits the
+      # manifest, not only `uv.lock`, and it leaves the two disagreeing, which
+      # the `lockfile` CI job's `uv lock --check` fails on.
       dev-dependencies:
         dependency-type: development
         update-types: [minor, patch]
