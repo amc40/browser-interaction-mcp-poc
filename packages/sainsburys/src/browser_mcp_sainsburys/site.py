@@ -101,6 +101,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser_mcp_core.browser import browser_page
 from browser_mcp_core.errors import NotLoggedInError
+from browser_mcp_core.locator_table import resolve
+from browser_mcp_sainsburys.locators import LOCATORS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -115,6 +117,10 @@ MY_ACCOUNT_URL = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
 #: verified against the real site: see the module docstring.
 DEFAULT_SEARCH_QUERY = "washing up liquid"
 
+# Which of the page's headings starts the "Products we love" section. Business
+# logic rather than a locator, so it lives here and not in `locators.py`: the
+# table's `groceries.products_we_love_heading` is what gets *waited for*, and
+# this is what the headings are scanned for once it has appeared.
 _PRODUCTS_WE_LOVE_HEADING = re.compile("products we love", re.IGNORECASE)
 
 # The consent banner is OneTrust, injected asynchronously after the load event,
@@ -150,6 +156,15 @@ _SETTLE_TIMEOUT_MS = 20_000
 _SETTLE_CHECKS = _SETTLE_TIMEOUT_MS // _SETTLE_POLL_MS
 
 
+def _locate(scope: Page | Locator, locator_id: str) -> Locator:
+    """Return the locator ``locators.py`` names ``locator_id``.
+
+    The only way this module addresses an element: nothing here builds a
+    locator inline, so every element it touches is a row a reviewer can see.
+    """
+    return resolve(scope, LOCATORS[locator_id])
+
+
 def _raise_if_not_logged_in(
     page: Page, message: str, *, screenshot_path: Path | None = None
 ) -> None:
@@ -165,8 +180,8 @@ def _raise_if_not_logged_in(
     with contextlib.suppress(PlaywrightTimeoutError):
         page.wait_for_load_state("domcontentloaded", timeout=15_000)
 
-    login_form = page.get_by_test_id(_USERNAME_TEST_ID)
-    signed_in = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
+    login_form = _locate(page, "login.username")
+    signed_in = _locate(page, "header.search_box")
     for _ in range(_SETTLE_CHECKS):
         if login_form.is_visible():
             break
@@ -189,25 +204,9 @@ def _raise_if_not_logged_in(
     raise NotLoggedInError(message)
 
 
-# Login form field test ids, from the same recording.
-_USERNAME_TEST_ID = "username"
-_PASSWORD_TEST_ID = "password"  # noqa: S105 - a DOM test id, not a credential
-_LOG_IN_TEST_ID = "log-in"
-_OTP_TEST_ID = "OTP_FIELD"
-_SUBMIT_CODE_TEST_ID = "submit-code"
-
-# Accessible name of the site search box, from the same recording. Matched by
-# prefix since the trailing "...or tab to ..." reads like a hint that could
-# change independently of the field's purpose.
-_SEARCH_BOX_NAME = re.compile("^Enter search terms", re.IGNORECASE)
-
-# Search results render as `data-testid="product-tile-<id>"`, each containing
-# its own `data-testid="add-button"` - adding straight from a results tile,
-# with no separate "Add to basket"-named control and no need to open the
-# product page first. Confirmed against a real search-and-add recording.
-_PRODUCT_TILE_SELECTOR = '[data-testid^="product-tile-"]'
+# Search results render as `data-testid="product-tile-<id>"` (the table's
+# `search.product_tile`); this is the prefix a tile's own id is read back from.
 _TILE_ID_PREFIX = "product-tile-"
-_ADD_BUTTON_TEST_ID = "add-button"
 
 
 @dataclass(frozen=True)
@@ -251,7 +250,7 @@ def _consent_cookies() -> list[dict[str, object]]:
 
 
 def _heading_texts(page: Page) -> list[str]:
-    headings = page.get_by_role("heading").all()
+    headings = _locate(page, "groceries.headings").all()
     return [heading.inner_text().strip() for heading in headings]
 
 
@@ -322,7 +321,7 @@ def products_we_love(url: str = GROCERIES_URL, count: int = 5) -> list[str]:
     with browser_page(headless=False, cookies=_consent_cookies()) as page:
         page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
-        heading = page.get_by_role("heading", name=_PRODUCTS_WE_LOVE_HEADING).first
+        heading = _locate(page, "groceries.products_we_love_heading")
         _wait_for_page_to_settle(heading)
 
         return _names_after_heading(_heading_texts(page), count)
@@ -389,12 +388,12 @@ def _run_search(page: Page, query: str) -> Locator:
     Raises:
         RuntimeError: If no results are found.
     """
-    search_box = page.get_by_role("combobox", name=_SEARCH_BOX_NAME).first
+    search_box = _locate(page, "header.search_box")
     search_box.click()
     search_box.fill(query)
     search_box.press("Enter")
 
-    tiles = page.locator(_PRODUCT_TILE_SELECTOR)
+    tiles = _locate(page, "search.product_tile")
     try:
         _wait_for_page_to_settle(tiles.first)
     except PlaywrightTimeoutError as exc:
@@ -476,8 +475,8 @@ _MAX_RESULT_TILES = 60
 def _tile_id(tile: Locator) -> str | None:
     """Return the id embedded in a tile's own `data-testid`, or ``None``.
 
-    `_PRODUCT_TILE_SELECTOR` already guarantees the attribute exists and
-    starts with `_TILE_ID_PREFIX` for anything reaching this function - but
+    The `search.product_tile` locator already guarantees the attribute exists
+    and starts with `_TILE_ID_PREFIX` for anything reaching this function - but
     parsed defensively rather than trusting that never changes. ``None`` here
     means `_product_match` raises rather than silently reporting a match with
     no id, since - unlike a tile with no name heading, which is routinely a
@@ -508,7 +507,7 @@ def _product_match(tile: Locator) -> ProductMatch | None:
             name this isn't an expected shape for a real result tile to have;
             see `_tile_id`.
     """
-    heading = tile.get_by_role("heading").first
+    heading = _locate(tile, "search.tile_name")
     try:
         heading.wait_for(state="visible", timeout=_TILE_HEADING_TIMEOUT_MS)
     except PlaywrightTimeoutError:
@@ -523,7 +522,7 @@ def _product_match(tile: Locator) -> ProductMatch | None:
             "its data-testid - the results page markup has probably changed."
         )
         raise RuntimeError(msg)
-    image = tile.locator("img").first
+    image = _locate(tile, "search.tile_image")
     image_url = image.get_attribute("src") if image.count() > 0 else None
     return ProductMatch(name=name, id=tile_id, image_url=image_url)
 
@@ -707,7 +706,7 @@ def add_to_basket(
             raise RuntimeError(msg)
         tile, matched_name = found
 
-        add_button = tile.get_by_test_id(_ADD_BUTTON_TEST_ID)
+        add_button = _locate(tile, "search.add_button")
         if add_button.count() == 0:
             msg = (
                 f'No "add" control found on the result for {product_name!r}. '
@@ -754,19 +753,19 @@ class SainsburysLoginSteps:
         page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
         # LOGIN_URL bounces through a redirect to the real form on the account
         # domain; wait for that form before filling anything.
-        page.get_by_test_id(_USERNAME_TEST_ID).wait_for(state="visible", timeout=30_000)
+        _locate(page, "login.username").wait_for(state="visible", timeout=30_000)
 
     def fill_username(self, page: Page, username: str) -> None:
         """Type the account username into the form."""
-        page.get_by_test_id(_USERNAME_TEST_ID).fill(username)
+        _locate(page, "login.username").fill(username)
 
     def fill_password(self, page: Page, password: str) -> None:
         """Type the account password into the form."""
-        page.get_by_test_id(_PASSWORD_TEST_ID).fill(password)
+        _locate(page, "login.password").fill(password)
 
     def submit(self, page: Page) -> None:
         """Submit the credentials and wait for whatever comes next."""
-        page.get_by_test_id(_LOG_IN_TEST_ID).click(timeout=15_000)
+        _locate(page, "login.submit").click(timeout=15_000)
         page.wait_for_load_state("domcontentloaded", timeout=30_000)
 
     def otp_requested(self, page: Page) -> bool:
@@ -782,15 +781,15 @@ class SainsburysLoginSteps:
         Returns:
             Whether the MFA field is on screen.
         """
-        otp_field = page.get_by_test_id(_OTP_TEST_ID)
+        otp_field = _locate(page, "login.otp")
         with contextlib.suppress(PlaywrightTimeoutError):
             otp_field.wait_for(state="visible", timeout=15_000)
         return otp_field.is_visible()
 
     def submit_otp(self, page: Page, code: str) -> None:
         """Enter a verification code, submit it, and wait for the redirect."""
-        page.get_by_test_id(_OTP_TEST_ID).fill(code)
-        page.get_by_test_id(_SUBMIT_CODE_TEST_ID).click(timeout=15_000)
+        _locate(page, "login.otp").fill(code)
+        _locate(page, "login.submit_code").click(timeout=15_000)
         # The code submit kicks off the redirect that actually completes the
         # login; let it finish before navigating away from it.
         page.wait_for_load_state("domcontentloaded", timeout=30_000)

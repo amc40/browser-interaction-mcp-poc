@@ -257,6 +257,25 @@ stages 0–2 involves a model at all.
 **Done when:** `make check` passes with no behaviour change, and the check
 rejects a deliberately out-of-surface commit on a test heal branch.
 
+**Built as stage 2 of [`scaling-plan.md`](scaling-plan.md)**, where the
+workspace moved things around. What differs from the list above:
+
+- Locator ids are relative to the site (`header.search_box`, not
+  `sainsburys.search_box`): each site package has its own table, and the
+  fingerprint gets the app slug prefixed instead.
+- The row types and `resolve(scope, spec)` are in core
+  (`browser_mcp_core.locator_table`); the site's `_locate(scope, id)` looks the
+  row up. The non-product heading filter and the "Products we love" text scan
+  stayed in `site.py`, alongside the timeouts, cookies and URLs.
+- The check (`browser_mcp_core.heal_surface`) is path-aware:
+  `packages/<slug>/src/<module>/locators.py` and `packages/<slug>/tests/fixtures/`,
+  for one site, never core. CI runs the base commit's copy of it, so a branch
+  cannot edit the checker to pass.
+- A test holds every site's `locators.py` to declarations, so "only the table
+  changed" cannot smuggle in behaviour.
+- The site tests' fakes answer by locator id, so a heal - which may not touch
+  tests - cannot fail them by re-addressing an element.
+
 ### Stage 1 — capture and redact, on the Pi, going nowhere
 
 - Tracing in `browser_page`: `context.tracing.start(screenshots=True,

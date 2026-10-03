@@ -6,6 +6,12 @@ these only have to fake a `Page`, not the launch machinery beneath it. That
 keeps these fast and offline, at the cost of not proving the real page still
 looks like this - see scripts/sainsburys_products_we_love.py for validating
 that for real.
+
+The fakes answer by **locator id**, never by test id, role or selector: `_wire`
+swaps `site._locate` for a lookup on the fake itself. So nothing here restates
+what `locators.py` says, and a change to how an element is addressed - the one
+thing a `claude/heal-*` branch may change, and it may not change these tests -
+cannot fail them. The real lookup is covered in test_locators.py.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from browser_mcp_core import login_steps
 from browser_mcp_core.errors import NotLoggedInError
 from browser_mcp_sainsburys import site as sainsburys
+from browser_mcp_sainsburys.locators import LOCATORS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -97,20 +104,18 @@ class FakeLocator:
         )
         return self.visible or appeared_late
 
-    def get_by_role(self, role: str, *, name: object = None) -> FakeLocator:
-        """Return this tile's product-name heading."""
-        del name
-        assert role == "heading", f"unexpected role {role!r}"
-        return self.heading if self.heading is not None else FakeLocator(count_=0)
-
-    def get_by_test_id(self, test_id: str) -> FakeLocator:
-        """Return this tile's "add" control."""
-        assert test_id == sainsburys._ADD_BUTTON_TEST_ID, f"unexpected id {test_id!r}"
-        return self.add_button if self.add_button is not None else FakeLocator(count_=0)
-
-    def locator(self, selector: str) -> FakeLocator:
-        """Return this tile's image, as `<img>`."""
-        assert selector == "img", f"unexpected selector {selector!r}"
+    def locate(self, locator_id: str) -> FakeLocator:
+        """Return the element inside this tile that ``locator_id`` names."""
+        if locator_id == "search.tile_name":
+            return self.heading if self.heading is not None else FakeLocator(count_=0)
+        if locator_id == "search.add_button":
+            return (
+                self.add_button
+                if self.add_button is not None
+                else FakeLocator(count_=0)
+            )
+        # A tile *is* its own image locator here - see `get_attribute`.
+        assert locator_id == "search.tile_image", f"unexpected id {locator_id!r}"
         return self if self.has_image else FakeLocator(count_=0)
 
     def get_attribute(self, name: str) -> str | None:
@@ -130,7 +135,7 @@ class FakeLocator:
 
 @dataclass
 class _ProductTilesLocator:
-    """`page.locator(_PRODUCT_TILE_SELECTOR)`: every result tile, in order."""
+    """`search.product_tile`: every result tile, in order."""
 
     tiles: list[FakeLocator]
 
@@ -212,56 +217,45 @@ class FakePage:
         """Record that a debug screenshot was requested."""
         self.screenshot_path = path
 
-    def get_by_role(
-        self, role: str, *, name: object = None
-    ) -> FakeLocator | _HeadingsLocator:
-        """Return the matching combobox or heading locator."""
-        del name
-        if role == "combobox":
-            return self.search_box
-        if role == "heading":
-            return _HeadingsLocator(self.headings)
-        msg = f"unexpected role {role!r}"
-        raise AssertionError(msg)
-
     @property
     def product_tile(self) -> FakeLocator:
         """Return the first result tile, for tests that only care about one."""
         return self.product_tiles[0]
 
-    def locator(self, selector: str) -> _ProductTilesLocator:
-        """Return the locator for a CSS selector `sainsburys.py` uses."""
-        assert selector == sainsburys._PRODUCT_TILE_SELECTOR, (
-            f"unexpected selector {selector!r}"
-        )
-        return _ProductTilesLocator(self.product_tiles)
-
-    def get_by_test_id(self, test_id: str) -> FakeLocator:
-        """Return the matching login-form field or button."""
-        by_test_id = {
-            sainsburys._USERNAME_TEST_ID: self.username_field,
-            sainsburys._PASSWORD_TEST_ID: self.password_field,
-            sainsburys._LOG_IN_TEST_ID: self.log_in_button,
-            sainsburys._OTP_TEST_ID: self.otp_field,
-            sainsburys._SUBMIT_CODE_TEST_ID: self.submit_code_button,
+    def locate(
+        self, locator_id: str
+    ) -> FakeLocator | _ProductTilesLocator | _HeadingsLocator:
+        """Return the element on this page that ``locator_id`` names."""
+        if locator_id == "search.product_tile":
+            return _ProductTilesLocator(self.product_tiles)
+        if locator_id == "groceries.headings":
+            return _HeadingsLocator(self.headings)
+        if locator_id == "groceries.products_we_love_heading":
+            return next(
+                (
+                    heading
+                    for heading in self.headings
+                    if sainsburys._PRODUCTS_WE_LOVE_HEADING.search(heading.text)
+                ),
+                FakeLocator(count_=0),
+            )
+        by_id = {
+            "header.search_box": self.search_box,
+            "login.username": self.username_field,
+            "login.password": self.password_field,
+            "login.submit": self.log_in_button,
+            "login.otp": self.otp_field,
+            "login.submit_code": self.submit_code_button,
         }
-        assert test_id in by_test_id, f"unexpected id {test_id!r}"
-        return by_test_id[test_id]
+        assert locator_id in by_id, f"unexpected id {locator_id!r}"
+        return by_id[locator_id]
 
 
 @dataclass
 class _HeadingsLocator:
-    """`page.get_by_role("heading")`: matches every heading, in order."""
+    """`groceries.headings`: every heading, in order."""
 
     headings: list[FakeLocator]
-
-    @property
-    def first(self) -> FakeLocator:
-        """Return the first heading whose text matches "Products we love"."""
-        for heading in self.headings:
-            if sainsburys._PRODUCTS_WE_LOVE_HEADING.search(heading.text):
-                return heading
-        return FakeLocator(count_=0)
 
     def all(self) -> list[FakeLocator]:
         """Return every heading, in document order."""
@@ -270,6 +264,16 @@ class _HeadingsLocator:
 
 def _heading(text: str) -> FakeLocator:
     return FakeLocator(text=text)
+
+
+def _fake_locate(scope: FakePage | FakeLocator, locator_id: str) -> Any:
+    """Stand in for `site._locate`, answering by id - see the module docstring.
+
+    Still insists the id is a real row, so a typo in `site.py` fails here rather
+    than only against the live site.
+    """
+    assert locator_id in LOCATORS, f"{locator_id!r} is not in locators.py"
+    return scope.locate(locator_id)
 
 
 def _wire(
@@ -302,6 +306,7 @@ def _wire(
         yield page
 
     monkeypatch.setattr(sainsburys, "browser_page", fake_browser_page)
+    monkeypatch.setattr(sainsburys, "_locate", _fake_locate)
     # The login runs through core's driver, which opens its own page; the two
     # are patched together so a test does not have to know which path it is on.
     monkeypatch.setattr(login_steps, "browser_page", fake_browser_page)

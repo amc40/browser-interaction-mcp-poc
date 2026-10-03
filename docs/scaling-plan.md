@@ -706,6 +706,9 @@ table, for the reasons the self-healing plan gives.
 **Done when:** `make check` passes with no behaviour change, and a deliberately
 out-of-surface commit on a test heal branch is rejected.
 
+What was built, and where it departs from self-healing stage 0 as written, is
+recorded under that stage in [`self-healing-plan.md`](self-healing-plan.md).
+
 ### Stage 3 — The fleet layer, and cut Sainsbury's over
 
 `deploy/` becomes `fleet/`, with `apps.yml` and the roles made plural: per-app
