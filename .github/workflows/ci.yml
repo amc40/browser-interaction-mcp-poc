@@ -187,7 +187,12 @@ jobs:
     name: deploy targets
     runs-on: ubuntu-latest
     needs: [gate]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Explicit results rather than the implicit success(), which also counts
+    # every job further up the chain - heal-surface is always skipped on a push
+    # to main, so that check would skip the deploy even after `ci` passed.
+    if: >-
+      !cancelled() && needs.gate.result == 'success'
+      && github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 5
     outputs:
       apps: ${{ steps.targets.outputs.apps }}
@@ -224,7 +229,9 @@ jobs:
     name: deploy ${{ matrix.app }}
     runs-on: ubuntu-latest
     needs: [deploy-targets]
-    if: needs.deploy-targets.outputs.apps != '[]'
+    if: >-
+      !cancelled() && needs.deploy-targets.result == 'success'
+      && needs.deploy-targets.outputs.apps != '[]'
     strategy:
       fail-fast: false
       matrix:
