@@ -57,9 +57,8 @@ LOCATORS: Mapping[str, LocatorSpec] = {
     # --- Search results --------------------------------------------------------
     "search.product_tile": LocatorSpec(
         # The 2026-10-04 redesign (tests/fixtures/search_results.html) dropped
-        # the `product-tile-<id>` testids for a fixed one with no id in it.
-        # The site's code still reads each tile's id out of the old prefix, so
-        # every readable tile now raises "no id" until that code changes too.
+        # the `product-tile-<id>` testids for a fixed one with no id in it;
+        # ids now come from each tile's `search.tile_link`.
         ByTestId("gw-product-card"),
         "Every search result's product card, in the order the page lists them. "
         "Sponsored banners in the grid are not product cards and are not matched.",
@@ -67,6 +66,13 @@ LOCATORS: Mapping[str, LocatorSpec] = {
     "search.tile_name": LocatorSpec(
         ByRole("heading"),
         "Within one result tile: the heading holding the product's name.",
+        first=True,
+    ),
+    "search.tile_link": LocatorSpec(
+        ByTestId("gw-product-name"),
+        "Within one result tile: the link to the product's own page. The site's "
+        "code reads the product's id from its `href`, the slug after "
+        "`/groceries/product/`, so a replacement must keep that shape.",
         first=True,
     ),
     "search.tile_image": LocatorSpec(
