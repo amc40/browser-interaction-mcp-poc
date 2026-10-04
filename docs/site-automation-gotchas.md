@@ -91,6 +91,15 @@ hard way. Each is a pattern, not a one-off.
   matters** - a leading-dot host cookie (`.www.example.com`) may land in the
   jar (`context.cookies()` shows it) yet not be visible to `document.cookie`
   on that host. Prefer the registrable domain.
+- **A loaded `storage_state` may be good for one use only.** Sainsbury's
+  replaces the session's token whenever the session is used, so a file that
+  is loaded but never written back is dead on its next use - which looks
+  exactly like "sessions expire after half an hour" if calls are spaced out,
+  and like "the login didn't work" if they aren't. Write
+  `context.storage_state()` back after every use, even a failed one (the
+  token was replaced either way), and serialise uses: two at once both start
+  from the same token. Diagnose it by loading the same file twice in a row
+  and watching the second bounce to login.
 
 ## Debugging aids that touch credentials
 

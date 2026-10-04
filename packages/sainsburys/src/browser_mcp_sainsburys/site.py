@@ -89,14 +89,18 @@ Two things learned there that aren't obvious from the site alone:
 from __future__ import annotations
 
 import contextlib
+import logging
+import os
 import re
 import stat
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser_mcp_core.browser import browser_page
@@ -109,6 +113,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from playwright.sync_api import Locator, Page
+
+_logger = logging.getLogger(__name__)
 
 GROCERIES_URL = "https://www.sainsburys.co.uk/gol-ui/groceries"
 MY_ACCOUNT_URL = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
@@ -350,6 +356,61 @@ def _check_logged_in(page: Page) -> None:
     )
 
 
+# Sainsbury's replaces the session's token every time the session is used, so
+# the saved session is good for exactly one use unless what the browser ends up
+# holding is written back. Two calls at once would both start from the same
+# token, and the second to reach Sainsbury's would present one the first had
+# already replaced - so only one call uses the session at a time.
+_SESSION_LOCK = threading.Lock()
+
+# Where a session Sainsbury's no longer accepts is sent: its identity provider.
+_IDP_URL = re.compile(r"https://account\.sainsburys\.co\.uk/")
+
+
+def _modified_ns(path: Path) -> int | None:
+    """Return ``path``'s modification time, or ``None`` if it doesn't exist."""
+    with contextlib.suppress(FileNotFoundError):
+        return path.stat().st_mtime_ns
+    return None
+
+
+def _save_session(page: Page, storage_state_path: Path, loaded_ns: int | None) -> None:
+    """Write the session the browser now holds back over ``storage_state_path``.
+
+    Skipped if the page ended up on the identity provider (the session lapsed
+    mid-action, and saving it would only replace one dead session with
+    another), and if the file changed since it was loaded (a login replaced
+    it meanwhile, and is newer than anything this page holds). A failure is
+    logged rather than raised: the action has already happened - an item may
+    be in the basket - so failing the call now would misreport it.
+    """
+    if _IDP_URL.search(page.url) or _modified_ns(storage_state_path) != loaded_ns:
+        return
+    # Written beside the real file and renamed over it, so a crash mid-write
+    # can't leave a truncated session; created owner-only up front, because
+    # the file is as sensitive as the login that produced it.
+    temp_path = storage_state_path.with_name(f".{storage_state_path.name}.tmp")
+    try:
+        temp_path.unlink(missing_ok=True)
+        os.close(
+            os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+        )
+        page.context.storage_state(path=temp_path)
+        # Checked again as late as possible: the login runs in another
+        # process, which `_SESSION_LOCK` can't hold off.
+        if _modified_ns(storage_state_path) != loaded_ns:
+            temp_path.unlink()
+            return
+        temp_path.replace(storage_state_path)
+    except (OSError, PlaywrightError):
+        temp_path.unlink(missing_ok=True)
+        _logger.warning(
+            "Could not save the refreshed Sainsbury's session; the next call "
+            "will likely need a fresh login.",
+            exc_info=True,
+        )
+
+
 @contextlib.contextmanager
 def _authenticated_page(storage_state_path: Path) -> Iterator[Page]:
     """Open a page in an already-authenticated Sainsbury's session.
@@ -357,20 +418,26 @@ def _authenticated_page(storage_state_path: Path) -> Iterator[Page]:
     Shared by every action below that needs to be logged in
     (`search_products`, `add_to_basket`), so "how do we get an
     authenticated page" has exactly one definition - the two callers can't
-    drift into checking that differently.
+    drift into checking that differently. Saves the session back afterwards,
+    whether or not the action succeeded - see `_SESSION_LOCK`.
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
     """
-    with browser_page(
-        headless=False,
-        storage_state=storage_state_path,
-        cookies=_consent_cookies(),
-    ) as page:
-        with contextlib.suppress(PlaywrightTimeoutError):
-            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
-        _check_logged_in(page)
-        yield page
+    with _SESSION_LOCK:
+        loaded_ns = _modified_ns(storage_state_path)
+        with browser_page(
+            headless=False,
+            storage_state=storage_state_path,
+            cookies=_consent_cookies(),
+        ) as page:
+            with contextlib.suppress(PlaywrightTimeoutError):
+                page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
+            _check_logged_in(page)
+            try:
+                yield page
+            finally:
+                _save_session(page, storage_state_path, loaded_ns)
 
 
 def _run_search(page: Page, query: str) -> Locator:

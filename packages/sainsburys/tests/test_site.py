@@ -17,6 +17,7 @@ cannot fail them. The real lookup is covered in test_locators.py.
 from __future__ import annotations
 
 import contextlib
+import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,10 @@ from browser_mcp_sainsburys.locators import LOCATORS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+# What `page.url` reads as once a dead session has been bounced to the identity
+# provider.
+_LOGIN_URL = "https://account.sainsburys.co.uk/login-ui/gol/login?login_challenge=abc"
 
 
 @dataclass
@@ -924,6 +929,183 @@ def test_add_to_basket_raises_when_the_result_has_no_add_control(
 
     with pytest.raises(RuntimeError, match='"add" control'):
         sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
+
+
+# ---------------------------------------------------------------------------
+# Saving the session back after each use
+# ---------------------------------------------------------------------------
+# Sainsbury's replaces the session's token every time it is used, so a session
+# that is loaded but never saved back is dead on its next use. FakeBrowserContext
+# writes "{}" wherever it is asked to save, standing in for the refreshed state.
+_OLD_SESSION = '{"cookies": "old"}'
+
+
+def _session_file(tmp_path: Path) -> Path:
+    path = tmp_path / "session.json"
+    path.write_text(_OLD_SESSION, encoding="utf-8")
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    return path
+
+
+def test_search_products_saves_the_refreshed_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == "{}"
+    assert stat.S_IMODE(session.stat().st_mode) == stat.S_IRUSR | stat.S_IWUSR
+    assert list(tmp_path.iterdir()) == [session]  # no temp file left behind
+
+
+def test_add_to_basket_saves_the_refreshed_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    sainsburys.add_to_basket("A Product", storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == "{}"
+
+
+def test_the_session_is_saved_even_when_the_action_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The token was replaced the moment the session was used, whether or not
+    # the search then found anything.
+    page = FakePage(product_tiles=[])
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    with pytest.raises(RuntimeError, match="No search results"):
+        sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == "{}"
+
+
+def test_a_session_that_fails_the_check_is_not_saved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(username_field=FakeLocator(visible=True))
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    with pytest.raises(NotLoggedInError):
+        sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == _OLD_SESSION
+
+
+def test_a_session_that_lapsed_mid_action_is_not_saved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(url=_LOGIN_URL)
+    monkeypatch.setattr(sainsburys, "_check_logged_in", lambda _page: None)
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == _OLD_SESSION
+
+
+def test_a_login_during_the_action_is_not_overwritten(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    session = _session_file(tmp_path)
+    fresh_login = '{"cookies": "fresh login"}'
+
+    def log_in_meanwhile(_page: object) -> None:
+        session.write_text(fresh_login, encoding="utf-8")
+        mtime = session.stat().st_mtime_ns + 1_000_000_000
+        os.utime(session, ns=(mtime, mtime))
+
+    monkeypatch.setattr(sainsburys, "_check_logged_in", log_in_meanwhile)
+    _wire(monkeypatch, FakePage())
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == fresh_login
+
+
+def test_a_login_while_saving_is_not_overwritten(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    session = _session_file(tmp_path)
+    fresh_login = '{"cookies": "fresh login"}'
+    page = FakePage()
+
+    def save_while_a_login_lands(*, path: Path) -> None:
+        path.write_text("{}", encoding="utf-8")
+        session.write_text(fresh_login, encoding="utf-8")
+        mtime = session.stat().st_mtime_ns + 1_000_000_000
+        os.utime(session, ns=(mtime, mtime))
+
+    monkeypatch.setattr(page.context, "storage_state", save_while_a_login_lands)
+    _wire(monkeypatch, page)
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == fresh_login
+    assert list(tmp_path.iterdir()) == [session]
+
+
+def test_a_failed_save_is_logged_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The action already happened - an item may be in the basket - so failing
+    # the call now would misreport it.
+    page = FakePage()
+
+    def fail_to_save(*, path: Path) -> None:
+        del path
+        msg = "disk full"
+        raise OSError(msg)
+
+    monkeypatch.setattr(page.context, "storage_state", fail_to_save)
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    results = sainsburys.search_products(storage_state_path=session)
+
+    assert [match.name for match in results] == ["A Product"]
+    assert session.read_text(encoding="utf-8") == _OLD_SESSION
+    assert list(tmp_path.iterdir()) == [session]
+    assert "Could not save the refreshed Sainsbury's session" in caplog.text
+
+
+def test_one_session_use_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Two concurrent calls would both start from the same token; the second
+    # to reach Sainsbury's would present one the first had already replaced.
+    held: list[bool] = []
+
+    def record_lock(_page: object) -> None:
+        held.append(sainsburys._SESSION_LOCK.locked())
+
+    monkeypatch.setattr(sainsburys, "_check_logged_in", record_lock)
+    _wire(monkeypatch, FakePage())
+
+    sainsburys.search_products(storage_state_path=_session_file(tmp_path))
+
+    assert held == [True]
+    assert not sainsburys._SESSION_LOCK.locked()
 
 
 # ---------------------------------------------------------------------------
