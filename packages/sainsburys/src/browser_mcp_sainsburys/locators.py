@@ -76,9 +76,10 @@ LOCATORS: Mapping[str, LocatorSpec] = {
         first=True,
     ),
     "search.add_button": LocatorSpec(
-        ByTestId("add-button"),
+        ByTestId("gw-add-to-basket"),
         "Within one result tile: its own add-to-basket control, clicked once per "
-        "unit of quantity.",
+        "unit of quantity. A product already in the trolley shows a quantity "
+        "counter in its place.",
     ),
     # --- The public groceries page ---------------------------------------------
     "groceries.products_we_love_heading": LocatorSpec(
