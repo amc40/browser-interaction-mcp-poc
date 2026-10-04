@@ -56,11 +56,13 @@ LOCATORS: Mapping[str, LocatorSpec] = {
     ),
     # --- Search results --------------------------------------------------------
     "search.product_tile": LocatorSpec(
-        # The site's code reads each tile's id back out of this attribute, after
-        # the `product-tile-` prefix, so a replacement must keep matching it.
-        ByCss('[data-testid^="product-tile-"]'),
-        "Every search result tile, in the order the page lists them. Includes "
-        "non-product tiles (sponsored slots), which have no name heading.",
+        # The 2026-10-04 redesign (tests/fixtures/search_results.html) dropped
+        # the `product-tile-<id>` testids for a fixed one with no id in it.
+        # The site's code still reads each tile's id out of the old prefix, so
+        # every readable tile now raises "no id" until that code changes too.
+        ByTestId("gw-product-card"),
+        "Every search result's product card, in the order the page lists them. "
+        "Sponsored banners in the grid are not product cards and are not matched.",
     ),
     "search.tile_name": LocatorSpec(
         ByRole("heading"),
