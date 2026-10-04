@@ -7,6 +7,7 @@ fake would only restate what this module assumes about that.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -187,3 +188,11 @@ def test_needs_git(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(RuntimeError, match="git is not on the PATH"):
         heal_surface.changed_paths("main")
+
+
+def test_tests_never_inherit_the_git_environment_of_a_hook() -> None:
+    """Hooks run with `GIT_DIR` set, which would aim these tests' git at the real repo.
+
+    That commits into it and, on a worktree, flips its `core.bare`.
+    """
+    assert [name for name in os.environ if name.startswith("GIT_")] == []

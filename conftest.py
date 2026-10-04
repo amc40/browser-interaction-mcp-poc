@@ -32,10 +32,12 @@ def _isolated_environment(
     """Keep the developer's own configuration out of the test run.
 
     Clears ``BROWSER_MCP_*`` variables and runs each test in an empty directory
-    so a local ``.env`` file cannot change the outcome.
+    so a local ``.env`` file cannot change the outcome. Also clears ``GIT_*``:
+    git exports ``GIT_DIR`` and friends to its hooks, and a hook that runs the
+    tests would otherwise point every throwaway repo's ``git`` at this one.
     """
     for name in os.environ:
-        if name.startswith("BROWSER_MCP_"):
+        if name.startswith(("BROWSER_MCP_", "GIT_")):
             monkeypatch.delenv(name)
     monkeypatch.chdir(tmp_path)
 
