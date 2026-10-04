@@ -160,9 +160,13 @@ left in place, and the run lists them for removing by hand.
 
 2. **Run the playbook**, `--check --diff` first as always.
 
-3. **Reconnect the connector** in claude.ai, log in to Sainsbury's through its
-   login page, and call `sainsburys_search`. The process serving it should be the
-   app's own account:
+3. **Reconnect the connector** in claude.ai. Its registration lived in the old
+   app's OAuth store, which is not carried over, so tool calls fail until you do.
+   The new app also starts without a Sainsbury's session, so log in through the
+   login page as usual before the first call that needs one.
+
+   Optionally, confirm the app is running as its own account - the scaling
+   plan's "done when" for this stage:
 
    ```sh
    ps -o user= -p "$(systemctl show -p MainPID --value browser-mcp@sainsburys)"   # bmcp-sainsburys
