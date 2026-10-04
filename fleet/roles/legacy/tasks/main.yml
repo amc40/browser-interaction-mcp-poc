@@ -1,42 +1,21 @@
 ---
-# The cut-over, run between preparing the apps and starting them (site.yml):
-# by now browser-mcp@<app>'s accounts, checkout, venv and configuration are all
-# in place, so the app is down only for the copy and the start.
+# Removes the single-app deployment from a host still running it, on the first
+# playbook run that finds it. Run between preparing the apps and starting them
+# (site.yml): its units hold the ports browser-mcp@sainsburys is about to use.
 #
-# Copies rather than moves, and leaves the old units installed but stopped and
-# disabled, so rolling back is starting them again (fleet/README.md). The
-# app keeps the old ports (apps.yml), so the tunnel's ingress does not change
-# either way. Removing what is left is retire.yml, asked for by name.
-- name: Cut the single-app deployment over
-  when: legacy_pending
+# Its state is not carried over. The site session only lasts about half an
+# hour, so it would be stale anyway, and without the OAuth store claude.ai just
+# has to authorise the connector once more. Both are cheaper than the code to
+# move them.
+- name: Look for the single-app deployment
+  ansible.builtin.stat:
+    path: /etc/systemd/system/{{ legacy_app_unit }}
+  register: legacy_unit_stat
+
+- name: Remove the single-app deployment
+  when: legacy_unit_stat.stat.exists
   block:
-    - name: Find the single-app deployment's state
-      ansible.builtin.stat:
-        path: "{{ legacy_state_dir }}"
-      register: legacy_state_stat
-
-    - name: Assert its state is where it is expected
-      ansible.builtin.assert:
-        that:
-          - legacy_state_stat.stat.exists
-          - legacy_state_stat.stat.isdir
-        fail_msg: >-
-          {{ legacy_app_unit }} is installed but {{ legacy_state_dir }} is not
-          a directory. Nothing has been stopped. If this host keeps that state
-          somewhere else, pass -e legacy_state_dir=<path>.
-        quiet: true
-
-    - name: Read the site session's checksum before the copy
-      ansible.builtin.stat:
-        path: "{{ legacy_state_dir }}/{{ legacy_session_file }}"
-        get_checksum: true
-        checksum_algorithm: sha256
-      register: legacy_session_before
-
-    # The webhook first, so no deploy can restart the app mid-copy, then any
-    # deploy already in flight, then the app itself, so neither the site
-    # session nor the OAuth store is copied mid-write.
-    - name: Stop and disable the single-app deployment's long-running units
+    - name: Stop and disable its long-running units
       ansible.builtin.systemd_service:
         name: "{{ item }}"
         state: stopped
@@ -46,96 +25,37 @@
         - "{{ legacy_app_unit }}"
 
     # Static, with no [Install] section, so there is nothing to disable.
-    - name: Stop any deploy the single-app deployment had in flight
+    - name: Stop any deploy it had in flight
       ansible.builtin.systemd_service:
         name: "{{ legacy_deploy_unit }}"
         state: stopped
 
-    # Everything: the site session, the OAuth store with claude.ai's client
-    # registration and upstream tokens, the browser profile and caches. Taking
-    # it all is what keeps the connector working without a re-authorisation
-    # and the site logged in without an MFA round-trip. --chown hands it to
-    # the app's own service account; -a keeps every mode, including the 0600
-    # session file's.
-    - name: Copy its state into the app's own state directory
-      ansible.builtin.command:
-        argv:
-          - rsync
-          - -aHAX
-          - --chown={{ legacy_target_user }}:{{ legacy_target_user }}
-          - "{{ legacy_state_dir }}/"
-          - "{{ legacy_target_state_dir }}/"
-      changed_when: true
+    # Removing the unit file is also what makes every later run skip this.
+    - name: Remove its units, sudoers rules and configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/{{ legacy_app_unit }}
+        - /etc/systemd/system/{{ legacy_webhook_unit }}
+        - /etc/systemd/system/{{ legacy_deploy_unit }}
+        - /etc/sudoers.d/deploy-webhook
+        - /etc/deploy-webhook
+        - /etc/browser-interaction-mcp
+
+    - name: Reload systemd without its units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
       when: not ansible_check_mode
 
-    - name: Find anything in the copy the app's account does not own
-      ansible.builtin.command:
-        argv:
-          - find
-          - "{{ legacy_target_state_dir }}"
-          - (
-          - "!"
-          - -user
-          - "{{ legacy_target_user }}"
-          - -o
-          - "!"
-          - -group
-          - "{{ legacy_target_user }}"
-          - )
-          - -print
-          - -quit
-      register: legacy_foreign_files
-      changed_when: false
-      failed_when: legacy_foreign_files.rc != 0 or legacy_foreign_files.stdout | length > 0
-      when: not ansible_check_mode
-
-    - name: Read the site session's checksum after the copy
-      ansible.builtin.stat:
-        path: "{{ legacy_target_state_dir }}/{{ legacy_session_file }}"
-        get_checksum: true
-        checksum_algorithm: sha256
-      register: legacy_session_after
-      when:
-        - legacy_session_before.stat.exists
-        - not ansible_check_mode
-
-    - name: Assert the site session survived the copy
-      ansible.builtin.assert:
-        that:
-          - legacy_session_after.stat.exists
-          - legacy_session_after.stat.checksum == legacy_session_before.stat.checksum
-          - legacy_session_after.stat.pw_name == legacy_target_user
-          - legacy_session_after.stat.mode == legacy_session_before.stat.mode
-        fail_msg: >-
-          The copy of {{ legacy_session_file }} in {{ legacy_target_state_dir }}
-          does not match the original in {{ legacy_state_dir }}, which is left
-          untouched. The old units are stopped: start them again
-          (fleet/README.md, rolling back) before investigating.
-        quiet: true
-      when:
-        - legacy_session_before.stat.exists
-        - not ansible_check_mode
-
-    - name: Record the cut-over
-      ansible.builtin.copy:
-        content: >
-          Cut over from {{ legacy_app_unit }} and {{ legacy_state_dir }} by
-          site.yml. Delete this file only to repeat the cut-over, which copies
-          that state over the app's own again.
-        dest: "{{ legacy_marker }}"
-        owner: root
-        group: root
-        mode: "0600"
-
-    - name: Report the cut-over
+    - name: Report what is left to remove by hand
       ansible.builtin.debug:
         msg:
-          - "{{ legacy_app_unit }} and {{ legacy_webhook_unit }} are stopped and
-             disabled, but still installed; {{ legacy_state_dir }} is
-             untouched. browser-mcp@{{ legacy_app }}.service starts next, on
-             the same ports."
-          - "Roll back, if it does not serve a real tool call: sudo systemctl
-             disable --now browser-mcp@{{ legacy_app }}.service
-             browser-mcp-webhook@{{ legacy_app }}.service, then sudo systemctl
-             enable --now {{ legacy_app_unit }} {{ legacy_webhook_unit }}."
-          - "Once it has, remove what is left with --tags retire-legacy."
+          - "Removed {{ legacy_app_unit }} and its webhook;
+             browser-mcp@sainsburys.service starts next, on the same ports.
+             Reconnect the connector in claude.ai, and log in to the site
+             again through its login page."
+          - "Its data and accounts are left for removing by hand: sudo rm -rf
+             {{ legacy_state_dir }} {{ legacy_browsers_dir }}
+             /opt/browser-interaction-mcp /var/cache/uv /opt/uv; sudo userdel
+             browsermcp; sudo userdel -r deploy"

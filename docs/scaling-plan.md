@@ -735,24 +735,25 @@ installed-but-stopped until the new one has served a real tool call.
 **Done when:** claude.ai calls `sainsburys_search` against the new unit, and
 `ps -o user=` shows `bmcp-sainsburys`.
 
-**What was built.** [`fleet/`](../fleet/README.md), as above, with the cut-over
-as part of the ordinary playbook run: it refuses to start on a host still running
-the old unit unless given `-e fleet_legacy_cutover=true`, and then prepares the
-new app completely before stopping the old one, copies its state and checks the
-site session survived. The "done when" is met once that has been run on the Pi;
-the steps are in the fleet README. Where it departs from the wording above:
+**What was built.** [`fleet/`](../fleet/README.md), as above. The "done when" is
+met once it has been run on the Pi; the steps are in the fleet README. Where it
+departs from the wording above:
+
+- **The migration does not move `storage_state`, or any state.** The first run
+  prepares the new app, then removes the old units and starts the new ones. With
+  one user and a proof of concept, a moment's downtime is fine, and the session
+  being protected above only lasts about half an hour: it would need a fresh
+  login anyway. Losing the OAuth store costs one reconnect of the connector. So
+  there is no copy, no rehearsed rollback and no old unit left installed.
 
 - **`apps.yml` has no hostnames.** They are personal, and `apps.yml` is tracked,
   so they stay in the gitignored `local.yml` (`app_hostnames`, or `fleet_domain`
   for `<app>.<domain>`), as the single hostname already did.
 - **Sainsbury's keeps its ports and its hostname.** So the tunnel's ingress does
-  not change, the connector needs no re-adding, and rolling back is starting the
-  old units again.
+  not change and the connector is reconnected rather than re-added.
 - **Each app's webhook secret is generated on its host**, not vaulted (D6 had it
   in the vault; the cost table above had it generated). CI holds each app's copy
-  in a GitHub environment named after the app. An environment without one falls
-  back to the repository's secret, which is what carries the cut-over: the new
-  receiver starts with the old one's secret.
+  in a GitHub environment named after the app.
 - **Per-app DNS records are optional.** Created through the Cloudflare API when a
   DNS-scoped token is vaulted; otherwise the playbook prints the
   `cloudflared tunnel route dns` commands, as before.

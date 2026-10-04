@@ -1,32 +1,16 @@
 ---
-# The single-app deployment this fleet replaced: one app, Sainsbury's, run as
+# The single-app deployment this fleet replaced: Sainsbury's, run as
 # `browsermcp` from a checkout owned by `deploy`, under unit names that predate
-# the fleet. Everything here is only ever read, stopped or - when asked for by
-# name - removed; nothing creates any of it any more.
-legacy_app: sainsburys
-
-legacy_systemd_dir: /etc/systemd/system
+# the fleet. Nothing creates any of this any more; tasks/main.yml removes it.
 legacy_app_unit: browser-interaction-mcp.service
 legacy_webhook_unit: deploy-webhook.service
 legacy_deploy_unit: deploy-browser-interaction-mcp.service
 
-# Where that deployment kept its state, in whichever storage phase this host is
-# in (vars.yml). Its browsers were here too, alongside.
+# What it leaves behind, for the operator to delete by hand, in whichever
+# storage phase this host is in (vars.yml).
 legacy_state_dir: >-
   {{ (fleet_ssd_mountpoint ~ '/browser-interaction-mcp')
      if (storage_mount_ssd | bool) else '/var/lib/browser-interaction-mcp' }}
 legacy_browsers_dir: >-
   {{ (fleet_ssd_mountpoint ~ '/playwright')
      if (storage_mount_ssd | bool) else '/var/lib/browser-interaction-mcp-playwright' }}
-legacy_webhook_env: /etc/deploy-webhook/env
-# The file that is expensive to lose: a logged-in site session, which costs a
-# real login with MFA to recreate.
-legacy_session_file: sainsburys_storage_state.json
-
-# Where it goes: the app's own state directory and service account (roles/app).
-legacy_target_user: "{{ fleet_service_user_prefix }}{{ legacy_app }}"
-legacy_target_state_dir: "{{ fleet_state_root }}/{{ legacy_app }}"
-# Written once the copy is verified, and what makes every later run leave the
-# old state alone. Root-owned and outside the app's state, so a compromised app
-# cannot delete it and have a later run copy the stale state over its own.
-legacy_marker: "{{ fleet_config_root }}/{{ legacy_app }}/legacy-migrated"

@@ -10,7 +10,7 @@ from, and the reasoning behind the topology, are in
 **Status:** one app (Sainsbury's) on one host (a Raspberry Pi 4). It is built
 multi-host-shaped anyway, because placement is far cheaper to have from the start
 than to retrofit (docs/scaling-plan.md D9). A host that ran the deployment from
-before the fleet needs a one-off cut-over first, below. The first run against any
+before the fleet is moved over by its first run, below. The first run against any
 host should be `--check --diff`.
 
 ## The shape
@@ -126,37 +126,20 @@ curl -sS http://127.0.0.1:8000/mcp     # 401 from the host itself is the good an
 Then add `https://<app hostname>/mcp` as a custom connector in claude.ai and run
 the OAuth flow.
 
-## Cutting over from the single-app deployment
+## Moving off the single-app deployment
 
 A host provisioned before the fleet layer runs Sainsbury's as
 `browser-interaction-mcp.service`, as `browsermcp`, from
-`/opt/browser-interaction-mcp`, with its state in
-`/var/lib/browser-interaction-mcp`. This is the one risky step in the scaling
-plan: the state holds the logged-in site session, and losing it costs a real
-login with MFA. So the playbook will not do it by surprise — until it has happened,
-every run against that host stops at its pre-tasks unless given
-`-e fleet_legacy_cutover=true`.
+`/opt/browser-interaction-mcp`. The first playbook run that finds it prepares
+`browser-mcp@sainsburys` completely, then stops, disables and removes the old
+units, sudoers rules and configuration, then starts the new units on the same
+ports, so the tunnel's ingress and the connector URL stay as they were. The app
+is down for the few seconds between the old unit stopping and the new one
+starting, plus a tunnel restart.
 
-What the cut-over run does, in order, all in one playbook run:
-
-1. Prepares `browser-mcp@sainsburys` completely — accounts, checkout, venv,
-   configuration — while the old unit is still serving.
-2. Stops and disables the old webhook receiver, any deploy it has in flight, and
-   the old app.
-3. Copies the old state directory, all of it, into
-   `/var/lib/browser-mcp/sainsburys`, owned by `bmcp-sainsburys` with every mode
-   kept. Copies, not moves: the original is left untouched.
-4. Checks nothing in the copy is owned by anyone else, and that the site session
-   file arrived byte-for-byte with its owner-only mode. If not, it stops there.
-5. Records the cut-over in `/etc/browser-mcp/sainsburys/legacy-migrated`, so no
-   later run does it again.
-6. Starts `browser-mcp@sainsburys` and its webhook, on the same ports as before,
-   so the tunnel's ingress does not change and the connector URL stays the same.
-
-The new webhook receiver keeps the old one's secret, so CI's existing
-`DEPLOY_WEBHOOK_SECRET` goes on working.
-
-The steps:
+Its state is not carried over: the site session would have expired anyway, and
+claude.ai just needs the connector authorising again. Its data and accounts are
+left in place, and the run lists them for removing by hand.
 
 1. **Move your local files across.** `vault.yml` and `local.yml` are gitignored,
    so they stayed in `deploy/` when the directory became `fleet/`:
@@ -171,75 +154,35 @@ The steps:
    and can be deleted. In `local.yml`, `mcp_public_hostname` becomes
    `app_hostnames.sainsburys` and `mcp_sainsburys_username` becomes
    `app_settings.sainsburys.SAINSBURYS_USERNAME` — keep the hostname exactly as it
-   was, or the connector in claude.ai needs re-adding. The playbook refuses to run
-   with the old names. Then reinstall the collections in `fleet/`, as above.
+   was, or the connector in claude.ai needs re-adding rather than reconnecting.
+   The playbook refuses to run with the old names. Then reinstall the collections
+   in `fleet/`, as above.
 
-2. **Rehearse it.** Read the diff: the old units stopping, the copy, the new
-   units.
+2. **Run the playbook**, `--check --diff` first as always.
 
-   ```sh
-   ansible-playbook site.yml --ask-become-pass --ask-vault-pass --check --diff -e fleet_legacy_cutover=true
-   ```
-
-3. **Run it.**
-
-   ```sh
-   ansible-playbook site.yml --ask-become-pass --ask-vault-pass -e fleet_legacy_cutover=true
-   ```
-
-4. **Check it, against the stage's "done when".** Call `sainsburys_search` from
-   claude.ai, and confirm the process serving it is the app's own account:
+3. **Reconnect the connector** in claude.ai, log in to Sainsbury's through its
+   login page, and call `sainsburys_search`. The process serving it should be the
+   app's own account:
 
    ```sh
    ps -o user= -p "$(systemctl show -p MainPID --value browser-mcp@sainsburys)"   # bmcp-sainsburys
    ```
 
-   Then `sainsburys_add_to_basket`, which needs the copied site session.
-
-5. **Move CI's deploy secrets into the app's environment.** Each app's deploy job
-   runs in a GitHub environment named after the app. Until that environment has
-   secrets of its own it falls back to the repository's, which is what carried the
-   cut-over. Create the `sainsburys` environment (Settings → Environments; limit
-   its deployment branches to `main`), give it `DEPLOY_WEBHOOK_URL` (the same value
-   as the repository secret) and `DEPLOY_WEBHOOK_SECRET`, without ever printing it:
+4. **Give CI the new webhook secret.** Each app's deploy job runs in a GitHub
+   environment named after the app. Create the `sainsburys` environment
+   (Settings → Environments; limit its deployment branches to `main`), give it
+   `DEPLOY_WEBHOOK_URL` (the same value as the repository secret) and
+   `DEPLOY_WEBHOOK_SECRET`, without ever printing it:
 
    ```sh
    ssh <the-pi> sudo cat /etc/browser-mcp/sainsburys/webhook-secret \
      | gh secret set DEPLOY_WEBHOOK_SECRET --env sainsburys
    ```
 
-   then delete the two repository-level secrets, so that a second app whose
-   environment is missing them fails loudly rather than signing a request to
-   Sainsbury's host.
+   then delete the two repository-level secrets. An environment missing its own
+   would otherwise fall back to those, and sign requests for Sainsbury's host.
 
-6. **Retire what is left**, once the new unit has served real tool calls:
-
-   ```sh
-   ansible-playbook site.yml --ask-become-pass --ask-vault-pass --tags retire-legacy
-   ```
-
-   That removes the old units, sudoers rules and configuration, then lists what it
-   deliberately leaves for you to remove by hand: the old state directory, browsers,
-   checkout and uv directories, and the `browsermcp` and `deploy` accounts.
-
-**Rolling back**, if the new unit does not serve: the old state is untouched and
-the old units are only disabled, on the same ports, so
-
-```sh
-sudo systemctl disable --now browser-mcp@sainsburys browser-mcp-webhook@sainsburys
-sudo systemctl enable --now browser-interaction-mcp deploy-webhook
-```
-
-restores the old deployment as it was before the cut-over. Anything the new unit
-wrote meanwhile, such as a refreshed site session, stays in
-`/var/lib/browser-mcp/sainsburys`. To try the cut-over again later, delete
-`/etc/browser-mcp/sainsburys/legacy-migrated`; the next run with
-`-e fleet_legacy_cutover=true` copies the old state over the new again.
-
-**Order against merging.** Merge first, then cut over promptly, and merge nothing
-else in between. The merge's own deploy still reaches the old unit, but the old
-deploy unit runs `deploy/deploy.sh`, which no longer exists after that, so the old
-deployment's code-only deploys stop working until the cut-over.
+5. **Remove what the run listed**, once the new unit works.
 
 ## Adding an app
 
@@ -250,7 +193,7 @@ deployment's code-only deploys stop working until the cut-over.
    personal settings, if any, in `app_settings`.
 4. A playbook run.
 5. Its GitHub environment, named after the app, with `DEPLOY_WEBHOOK_URL` and
-   `DEPLOY_WEBHOOK_SECRET`, as in step 5 above.
+   `DEPLOY_WEBHOOK_SECRET`, as in step 4 above.
 6. The connector in claude.ai, and the site's first real login.
 
 Nothing in the vault, and nothing in the OAuth app if it has wildcard matching on.
@@ -303,7 +246,7 @@ false` is also correct there.
 | `uv` | Once per host | The pinned `uv` binary |
 | `browser` | Once per host | Chromium's apt libraries, Xvfb if any app on the host is headed, and — after every app is prepared — the browser build each app's Playwright needs |
 | `app` | Per app | The shared template units and slice once, then per app: accounts, directories, checkout, `uv sync --package`, configuration, sudoers, drop-in, and finally starting it |
-| `legacy` | Once per host | Detecting the single-app deployment, cutting it over, and — by name only — retiring it |
+| `legacy` | Once per host | Removing the single-app deployment, if the host still runs it |
 | `tunnel` | Once per host | `cloudflared`, the host's tunnel credentials, ingress generated from the host's apps, and their DNS records |
 
 `site.yml` orders them so that nothing an app's traffic reaches changes until
@@ -330,7 +273,7 @@ after the app.
 
 Each app's secret is generated on its host by the playbook the first time and
 kept in `/etc/browser-mcp/<app>/webhook-secret`; copy it into the app's
-environment as shown in the cut-over's step 5.
+environment as in step 4 of moving off the single-app deployment.
 
 **A Playwright upgrade that needs a new browser build is not a code-only
 deploy.** The browsers directory is shared and root-owned, so no deploy can
@@ -408,7 +351,6 @@ Configuration cannot fix what the code does not expose. These are open:
   the playbook removes any `.env` it finds there or in the checkout.
 - **`make fleet` before pushing**, which CI also runs: ansible-lint at the
   production profile, a syntax check, and [`tests/render.yml`](tests/render.yml),
-  which renders every template against a two-host sample fleet and checks the
-  cut-over is refused unless asked for.
+  which renders every template against a two-host sample fleet.
 - **CI never exercises arm64, systemd or the real accounts.** Those only ever
   meet on a host, which is why the first run against one is `--check --diff`.

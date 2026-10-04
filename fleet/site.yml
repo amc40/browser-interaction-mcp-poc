@@ -91,16 +91,6 @@
         - fleet_throttled.stdout != 'throttled=0x0'
       tags: [always]
 
-    # Refuses to go on if this host still runs the single-app deployment and
-    # the run has not been told to cut it over. See roles/legacy.
-    - name: Look for the single-app deployment
-      ansible.builtin.include_role:
-        name: legacy
-        tasks_from: detect.yml
-        apply:
-          tags: [always]
-      tags: [always]
-
   roles:
     - role: base
       tags: [base]
@@ -111,12 +101,10 @@
     - role: browser
       tags: [browser]
 
-  # Ordered so that nothing an app's traffic reaches is touched until
-  # everything it needs is ready: each app is fully prepared - accounts,
-  # checkout, venv, configuration - before any unit is started, and the
-  # single-app deployment, if any, is stopped and its state copied across only
-  # after that, so the gap between the old unit stopping and the new one
-  # starting is a copy and a restart rather than a `uv sync`.
+  # Each app is fully prepared - accounts, checkout, venv, configuration -
+  # before any unit is started, and the single-app deployment, if this host
+  # still runs it, is removed just before the apps start, since its units hold
+  # the ports Sainsbury's is about to use.
   tasks:
     - name: Install the units every app shares
       ansible.builtin.include_role:
@@ -146,7 +134,7 @@
           tags: [browser]
       tags: [browser]
 
-    - name: Cut the single-app deployment over
+    - name: Remove the single-app deployment
       ansible.builtin.include_role:
         name: legacy
         apply:
@@ -171,15 +159,6 @@
         apply:
           tags: [tunnel]
       tags: [tunnel]
-
-    # Only when asked for by name, and only once the cut-over has happened.
-    - name: Remove the single-app deployment's units and configuration
-      ansible.builtin.include_role:
-        name: legacy
-        tasks_from: retire.yml
-        apply:
-          tags: [retire-legacy, never]
-      tags: [retire-legacy, never]
 
   post_tasks:
     - name: Report what is left to do by hand

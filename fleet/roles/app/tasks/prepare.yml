@@ -184,9 +184,7 @@
 # and kept: it means nothing outside this app's webhook and CI's matching
 # GitHub environment secret, so there is no reason to type it into the vault.
 # Kept in a file of its own so it can be piped into `gh secret set` without
-# ever being printed - see fleet/README.md. An app being cut over from the
-# single-app deployment keeps that deployment's secret instead, so CI's
-# existing one goes on working (roles/legacy/tasks/detect.yml).
+# ever being printed - see fleet/README.md.
 - name: Look for the app's deploy webhook secret
   ansible.builtin.stat:
     path: "{{ app_config_dir }}/webhook-secret"
@@ -204,9 +202,8 @@
     app_webhook_secret: >-
       {{ (app_webhook_secret_file.content | b64decode | trim)
          if app_webhook_secret_stat.stat.exists
-         else ((legacy_webhook_seed | default({}))[app.key]
-               | default(lookup('ansible.builtin.password', '/dev/null',
-                                length=64, chars=['digits', 'abcdef']))) }}
+         else lookup('ansible.builtin.password', '/dev/null',
+                     length=64, chars=['digits', 'abcdef']) }}
   no_log: true
 
 - name: Store the app's deploy webhook secret
@@ -257,8 +254,8 @@
   register: app_dropin
 
 # Restarts are decided in start.yml, after every app is prepared and any
-# single-app deployment is cut over, rather than by handlers that would run
-# them in the middle.
+# single-app deployment removed, rather than by handlers that would run them in
+# the middle.
 - name: Note what needs restarting
   ansible.builtin.set_fact:
     app_restart: >-

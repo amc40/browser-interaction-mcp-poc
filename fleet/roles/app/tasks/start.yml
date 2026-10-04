@@ -1,6 +1,6 @@
 ---
 # Start, or restart, one app's webhook receiver and server, once every app on
-# the host is prepared and any single-app deployment has been cut over. A unit
+# the host is prepared and any single-app deployment has been removed. A unit
 # restarts if its own configuration or code changed in this run, or if the
 # shared template units did; otherwise it is only made sure to be running.
 #

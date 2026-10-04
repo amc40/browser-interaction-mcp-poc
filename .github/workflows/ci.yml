@@ -218,9 +218,8 @@ jobs:
   # One job per app, each in the GitHub environment named after the app, which
   # holds that app's own DEPLOY_WEBHOOK_URL and DEPLOY_WEBHOOK_SECRET - every
   # app's receiver has its own secret (docs/scaling-plan.md D5). An environment
-  # without them falls back to repository secrets of the same names, which is
-  # what keeps the single-app deployment's working through the cut-over; see
-  # fleet/README.md for moving them into the environment afterwards.
+  # without them would fall back to repository secrets of the same names, so
+  # there should be none: see fleet/README.md.
   deploy:
     name: deploy ${{ matrix.app }}
     runs-on: ubuntu-latest

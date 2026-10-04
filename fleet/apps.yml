@@ -32,8 +32,8 @@ apps:
     host: pi
     package: sainsburys
     console_script: browser-interaction-mcp
-    # The ports the single-app deployment used, kept so the cut-over changes
-    # no tunnel ingress and a rollback is just starting the old unit again.
+    # The ports the single-app deployment used, kept so moving onto the fleet
+    # layout changed nothing in the tunnel's ingress.
     port: 8000
     webhook_port: 8787
     # Akamai Bot Manager blocks headless Chromium on this site.
