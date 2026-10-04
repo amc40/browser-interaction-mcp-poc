@@ -1,0 +1,16 @@
+---
+# The single-app deployment this fleet replaced: Sainsbury's, run as
+# `browsermcp` from a checkout owned by `deploy`, under unit names that predate
+# the fleet. Nothing creates any of this any more; tasks/main.yml removes it.
+legacy_app_unit: browser-interaction-mcp.service
+legacy_webhook_unit: deploy-webhook.service
+legacy_deploy_unit: deploy-browser-interaction-mcp.service
+
+# What it leaves behind, for the operator to delete by hand, in whichever
+# storage phase this host is in (vars.yml).
+legacy_state_dir: >-
+  {{ (fleet_ssd_mountpoint ~ '/browser-interaction-mcp')
+     if (storage_mount_ssd | bool) else '/var/lib/browser-interaction-mcp' }}
+legacy_browsers_dir: >-
+  {{ (fleet_ssd_mountpoint ~ '/playwright')
+     if (storage_mount_ssd | bool) else '/var/lib/browser-interaction-mcp-playwright' }}

@@ -1,0 +1,58 @@
+---
+# Copy to vault.yml, fill in, then encrypt it and never decrypt it into the
+# working tree:
+#
+#   cp vault.example.yml vault.yml
+#   $EDITOR vault.yml
+#   ansible-vault encrypt vault.yml
+#
+# Edit it afterwards with `ansible-vault edit vault.yml`, which decrypts to a
+# temporary file rather than to the checkout. vault.yml is gitignored either
+# way, and the repository has a gitleaks gate, but neither is a reason to write
+# a plaintext secret into the tree in the first place.
+#
+# There is nothing per app in here. The OAuth app is fleet-wide, each app's
+# deploy webhook secret is generated on its host by the playbook, and the one
+# per-app value that is personal rather than secret - a site account's
+# username - goes in local.yml.
+
+# The fleet's one GitHub OAuth app (https://github.com/settings/developers).
+# Every app needs two callbacks: https://<app hostname>/auth/callback for the
+# MCP endpoint, and https://<app hostname>/sainsburys-login/auth/callback for
+# the login page. One redirect URI covering the fleet's domain with wildcard
+# matching enabled covers both for every app (docs/scaling-plan.md D10);
+# without it, register both URLs for each app. The loopback callback in the
+# README is for local development only.
+vault_mcp_github_client_id: Ov23liREPLACEME
+vault_mcp_github_client_secret: REPLACEME
+
+# The named tunnel's UUID, from `cloudflared tunnel create <name>` on a machine
+# logged in to Cloudflare. Per host: with more than one host, move these two
+# into inventory/host_vars/<host>/vault.yml, one tunnel each.
+vault_mcp_tunnel_id: 00000000-0000-0000-0000-000000000000
+
+# The contents of the credentials file that command wrote, as a mapping.
+#
+# `cloudflared tunnel create` writes it to ~/.cloudflared/<tunnel-id>.json -
+# the HOME of whichever account ran the command (so /root/.cloudflared/ if
+# that was via sudo) - not to /etc/cloudflared/. /etc/cloudflared/ is where
+# the *tunnel role* puts its own copy, generated from what's below, once you
+# run the playbook; it won't exist before that, and isn't where you go
+# looking for the original.
+#
+# Copy every key from that JSON file here verbatim, same casing: the tunnel
+# role serialises this mapping straight back to JSON (`| to_nice_json`), so it
+# has to match what cloudflared itself wrote.
+vault_mcp_tunnel_credentials:
+  AccountTag: REPLACEME
+  TunnelID: 00000000-0000-0000-0000-000000000000
+  TunnelName: browser-interaction-mcp
+  TunnelSecret: REPLACEME
+
+# Optional: a Cloudflare API token scoped to Zone -> DNS -> Edit on the one zone
+# the apps' hostnames are in, with fleet_cloudflare_zone set in local.yml. With
+# it, the playbook creates each app's CNAME to its host's tunnel; without it,
+# the playbook prints the `cloudflared tunnel route dns` command to run
+# instead. The one credential here that can change a name outside the host,
+# hence the narrow scope (docs/scaling-plan.md D4).
+# vault_cloudflare_api_token: REPLACEME

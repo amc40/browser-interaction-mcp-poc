@@ -1,0 +1,29 @@
+---
+# Start, or restart, one app's webhook receiver and server, once every app on
+# the host is prepared and any single-app deployment has been removed. A unit
+# restarts if its own configuration or code changed in this run, or if the
+# shared template units did; otherwise it is only made sure to be running.
+#
+# Skipped under --check: on a fresh host the unit files were only simulated,
+# not written, so there is nothing yet for systemd to find.
+- name: Enable and start the app's deploy webhook
+  ansible.builtin.systemd_service:
+    name: "{{ app_webhook_unit }}"
+    enabled: true
+    state: >-
+      {{ 'restarted'
+         if (app.key in app_webhook_restart | default([]) or app_shared_units_changed | default(false))
+         else 'started' }}
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Enable and start the app
+  ansible.builtin.systemd_service:
+    name: "{{ app_unit }}"
+    enabled: true
+    state: >-
+      {{ 'restarted'
+         if (app.key in app_restart | default([]) or app_shared_units_changed | default(false))
+         else 'started' }}
+    daemon_reload: true
+  when: not ansible_check_mode

@@ -1,0 +1,267 @@
+---
+# Everything one app needs short of starting it: its two accounts, its
+# directories, its checkout and venv, its configuration and its sudoers rules.
+# Run once per app on this host (site.yml loops over fleet_host_apps); nothing
+# here starts or restarts a unit, so a whole host can be prepared before any of
+# its traffic is touched.
+
+# --- Accounts (docs/scaling-plan.md D3) ------------------------------------
+# No login, ever: shell is nologin and the password is locked. Shell access as
+# the service account is full control of the site account the app automates,
+# because anyone who can run a command can start the server on stdio and drive
+# the browser without ever touching GitHub (docs/deployment.md §6).
+- name: Create the app's service and deploy groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    system: true
+  loop:
+    - "{{ app_service_user }}"
+    - "{{ app_deploy_user }}"
+
+- name: Create the app's service account
+  ansible.builtin.user:
+    name: "{{ app_service_user }}"
+    group: "{{ app_service_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    password: "!"
+    password_lock: true
+    home: "{{ app_state_dir }}"
+    create_home: false
+
+# Owns the checkout, so a webhook-triggered redeploy needs no elevation for
+# anything but the final restart. Its home is a real, writable directory
+# because Ansible's become_user machinery, used below to run git and uv as this
+# account, wants one for its scratch files.
+- name: Create the app's deploy account
+  ansible.builtin.user:
+    name: "{{ app_deploy_user }}"
+    group: "{{ app_deploy_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    password: "!"
+    password_lock: true
+    home: "{{ app_home }}"
+    create_home: false
+
+# --- Directories -------------------------------------------------------------
+# Everything the app writes: its browser profile and cache, which are what
+# kill SD cards, its site session, and the OAuth store, which holds upstream
+# GitHub tokens at rest (docs/deployment.md §3). Owner-only, and owned by an
+# account no other app shares.
+- name: Create the app's state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_service_user }}"
+    group: "{{ app_service_user }}"
+    mode: "0700"
+  loop:
+    - "{{ app_state_dir }}"
+    - "{{ app_state_dir }}/cache"
+    - "{{ app_state_dir }}/data"
+    - "{{ app_state_dir }}/data/fastmcp"
+    - "{{ app_state_dir }}/browser-profile"
+
+# Readable by everyone, so the service account can run the code and the Python
+# it links to; writable only by the deploy account, so the app cannot rewrite
+# its own code.
+- name: Create the app's checkout and Python directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_deploy_user }}"
+    group: "{{ app_deploy_user }}"
+    mode: "0755"
+  loop:
+    - "{{ app_home }}"
+    - "{{ app_checkout_dir }}"
+    - "{{ app_python_dir }}"
+
+# The app's own uv cache, never a shared one: a cache every deploy account can
+# write is a way to get code run in another app's next sync. Not recursive:
+# uv links the venv's files to the cache's, so changing the files' modes here
+# would change the venv's too.
+- name: Create the app's uv cache
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ app_deploy_user }}"
+    group: "{{ app_deploy_user }}"
+    mode: "0700"
+  loop:
+    - "{{ app_home }}/cache"
+    - "{{ app_uv_cache_dir }}"
+
+# --- Code --------------------------------------------------------------------
+# As the deploy account rather than as root-then-chown: git refuses to operate
+# on a repository it doesn't own (its "dubious ownership" protection, which
+# applies to root as to anyone), so root-then-chown works exactly once.
+#
+# Skipped under --check: predicting a change still runs real git, and on a
+# fresh host there is no git yet, nor a checkout for the sync below to change
+# into. A first --check run reports less than a first real run.
+- name: Check out the application
+  become: true
+  become_user: "{{ app_deploy_user }}"
+  ansible.builtin.git:
+    repo: "{{ fleet_repo_url }}"
+    dest: "{{ app_checkout_dir }}"
+    version: "{{ fleet_repo_version }}"
+    depth: 1
+    single_branch: true
+  register: app_checkout
+  when: not ansible_check_mode
+
+# --frozen respects uv.lock and fails rather than silently resolving something
+# else; --no-dev omits the gate tooling; --package installs this app's site
+# package and core, and no other site's.
+- name: Sync the app's environment from the lockfile
+  become: true
+  become_user: "{{ app_deploy_user }}"
+  ansible.builtin.command:
+    argv:
+      - "{{ fleet_uv }}"
+      - sync
+      - --frozen
+      - --no-dev
+      - --package
+      - "{{ app_distribution }}"
+    chdir: "{{ app_checkout_dir }}"
+  environment:
+    UV_CACHE_DIR: "{{ app_uv_cache_dir }}"
+    UV_PYTHON_INSTALL_DIR: "{{ app_python_dir }}"
+    UV_PYTHON_DOWNLOADS: automatic
+  register: app_sync
+  # uv reports its work on stderr, and says "Audited N packages" when there was
+  # nothing to do.
+  changed_when: >-
+    (app_sync.stdout ~ app_sync.stderr)
+    is search('Installed|Uninstalled|Creating virtual environment')
+  when: not ansible_check_mode
+
+# --- Configuration -----------------------------------------------------------
+- name: Create the app's configuration directory
+  ansible.builtin.file:
+    path: "{{ app_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Read by systemd as root before privileges are dropped, so it never has to be
+# readable by anything else (docs/deployment.md §5).
+- name: Install the app's environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ app_config_dir }}/env"
+    owner: root
+    group: root
+    mode: "0600"
+  register: app_env
+  no_log: true  # it holds the OAuth client secret
+
+- name: Install the app's deploy settings
+  ansible.builtin.template:
+    src: deploy.env.j2
+    dest: "{{ app_config_dir }}/deploy.env"
+    owner: root
+    group: root
+    mode: "0644"
+
+# The unit's WorkingDirectory is the state directory, so a `.env` would only be
+# read from there - but the checkout is where someone would put one out of
+# habit, and the failure it causes is a boot loop.
+- name: Ensure no .env shadows the environment file
+  ansible.builtin.file:
+    path: "{{ item }}/.env"
+    state: absent
+  loop:
+    - "{{ app_checkout_dir }}"
+    - "{{ app_state_dir }}"
+
+# The deploy webhook's secret is generated here, on the host, the first time,
+# and kept: it means nothing outside this app's webhook and CI's matching
+# GitHub environment secret, so there is no reason to type it into the vault.
+# Kept in a file of its own so it can be piped into `gh secret set` without
+# ever being printed - see fleet/README.md.
+- name: Look for the app's deploy webhook secret
+  ansible.builtin.stat:
+    path: "{{ app_config_dir }}/webhook-secret"
+  register: app_webhook_secret_stat
+
+- name: Read the app's deploy webhook secret
+  ansible.builtin.slurp:
+    src: "{{ app_config_dir }}/webhook-secret"
+  register: app_webhook_secret_file
+  when: app_webhook_secret_stat.stat.exists
+  no_log: true
+
+- name: Settle the app's deploy webhook secret
+  ansible.builtin.set_fact:
+    app_webhook_secret: >-
+      {{ (app_webhook_secret_file.content | b64decode | trim)
+         if app_webhook_secret_stat.stat.exists
+         else lookup('ansible.builtin.password', '/dev/null',
+                     length=64, chars=['digits', 'abcdef']) }}
+  no_log: true
+
+- name: Store the app's deploy webhook secret
+  ansible.builtin.copy:
+    content: "{{ app_webhook_secret }}\n"
+    dest: "{{ app_config_dir }}/webhook-secret"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Install the app's deploy webhook environment file
+  ansible.builtin.template:
+    src: webhook.env.j2
+    dest: "{{ app_config_dir }}/webhook.env"
+    owner: root
+    group: root
+    mode: "0600"
+  register: app_webhook_env
+  no_log: true  # it holds the webhook's secret
+
+# Validated before being installed: a syntax error in a sudoers file, applied
+# without visudo's own check, can lock out sudo entirely for everyone.
+- name: Install the app's deploy sudoers rules
+  ansible.builtin.template:
+    src: sudoers.j2
+    dest: /etc/sudoers.d/browser-mcp-{{ app.key }}
+    owner: root
+    group: root
+    mode: "0440"
+    validate: visudo -cf %s
+
+- name: Create the app's unit drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/browser-mcp@{{ app.key }}.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the app's unit drop-in
+  ansible.builtin.template:
+    src: app.conf.j2
+    dest: /etc/systemd/system/browser-mcp@{{ app.key }}.service.d/app.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: app_dropin
+
+# Restarts are decided in start.yml, after every app is prepared and any
+# single-app deployment removed, rather than by handlers that would run them in
+# the middle.
+- name: Note what needs restarting
+  ansible.builtin.set_fact:
+    app_restart: >-
+      {{ (app_restart | default([]))
+         + ([app.key] if (app_checkout.changed or app_sync.changed
+                          or app_env.changed or app_dropin.changed) else []) }}
+    app_webhook_restart: >-
+      {{ (app_webhook_restart | default([]))
+         + ([app.key] if (app_checkout.changed or app_webhook_env.changed) else []) }}

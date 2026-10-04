@@ -1,0 +1,112 @@
+---
+# Fleet-wide facts. Anything role-local lives in that role's defaults/main.yml
+# instead; anything secret lives in vault.yml, encrypted with ansible-vault,
+# and is referenced here through a `vault_`-prefixed name so that it is obvious
+# at a glance which values are secret. The apps themselves are in apps.yml.
+
+# --- Which apps this host runs -------------------------------------------
+# Every per-app task loops over this: the apps.yml entries assigned to the
+# host being provisioned (docs/scaling-plan.md D9).
+fleet_host_apps: >-
+  {{ apps | dict2items | selectattr('value.host', 'eq', inventory_hostname) | list }}
+
+# --- Accounts -------------------------------------------------------------
+# Two per app, both nologin and locked (docs/scaling-plan.md D3):
+#   bmcp-<app>   runs the app and owns its state. Reads its checkout, never
+#                writes it. Shell access as this account is full control of
+#                the site account the app automates (docs/deployment.md §6).
+#   bmcpd-<app>  owns the app's checkout, venv and uv cache, and may restart
+#                exactly that app's two units. A shared deploy account would be
+#                code execution as every app at once, undoing the split.
+fleet_service_user_prefix: bmcp-
+fleet_deploy_user_prefix: bmcpd-
+
+# --- Paths ----------------------------------------------------------------
+# /opt/browser-mcp/<app>/ is bmcpd-<app>'s home: checkout/ (with its .venv),
+# python/ (uv's own Python build, which the venv links to) and cache/uv.
+fleet_opt_root: /opt/browser-mcp
+# /etc/browser-mcp/<app>/: the app's environment files, read by systemd as root.
+# Outside the checkout on purpose: settings.py reads `.env` relative to the
+# working directory and forbids unknown BROWSER_MCP_* keys, which under systemd
+# restart would be a boot loop.
+fleet_config_root: /etc/browser-mcp
+
+fleet_repo_url: https://github.com/amc40/browser-interaction-mcp-poc.git
+# What a playbook run checks out for every app. The code-only deploy path
+# (fleet/deploy.sh) always tracks main whatever this says.
+fleet_repo_version: main
+
+fleet_uv: /usr/local/bin/uv
+
+# The repository on the control node, where apps.yml's packages are checked
+# for. Not a path on any host.
+fleet_repo_root: "{{ playbook_dir | dirname }}"
+
+# Everything that gets written constantly should end up on an SSD - an
+# always-on Chromium writes to its profile and cache hard enough to kill an SD
+# card - but the two don't have to arrive together. Two phases:
+#
+#   Phase 1 (storage_mount_ssd: false, the default below): no SSD yet. State
+#   lands directly on the SD card, under fleet_sd_state_root.
+#
+#   Phase 2: once an SSD is attached, formatted, and its UUID known, set
+#   storage_mount_ssd: true and storage_ssd_uuid below, then run
+#     ansible-playbook site.yml --tags migrate --ask-become-pass --ask-vault-pass
+#   once - it mounts the SSD and copies Phase 1's state across - followed by
+#   an ordinary run to finish switching everything over and restart the apps.
+#   See roles/storage/tasks/migrate.yml.
+#
+# fleet_state_root / fleet_browsers_dir resolve to whichever phase is current,
+# so nothing outside the storage role needs to know which one that is. Each
+# app's state is <fleet_state_root>/<app>, mode 0700, owned by bmcp-<app>.
+storage_mount_ssd: false
+storage_ssd_uuid: ""
+
+fleet_ssd_mountpoint: /mnt/ssd
+fleet_sd_state_root: /var/lib/browser-mcp
+fleet_sd_browsers_dir: /var/lib/browser-mcp-playwright
+
+fleet_state_root: >-
+  {{ (fleet_ssd_mountpoint ~ '/browser-mcp')
+     if (storage_mount_ssd | bool) else fleet_sd_state_root }}
+fleet_browsers_dir: >-
+  {{ (fleet_ssd_mountpoint ~ '/browser-mcp-playwright')
+     if (storage_mount_ssd | bool) else fleet_sd_browsers_dir }}
+
+# --- Server settings, the same for every app ------------------------------
+# Loopback only. cloudflared dials localhost, so no app binds a routable
+# interface (docs/deployment.md §1). Any local account can still reach any
+# app's port, which is why every request is authenticated.
+mcp_bind_host: 127.0.0.1
+mcp_log_level: INFO
+mcp_rate_limit_per_second: 1.0
+mcp_rate_limit_burst: 5
+
+# The one GitHub account allowed to call tools, as its numeric user ID.
+mcp_github_user_id: "36701168"
+# Revocation delay: a token revoked on GitHub keeps working until its cache
+# entry expires. Shorter than the 300s default because this endpoint is
+# reachable from the internet.
+mcp_github_token_cache_seconds: 60
+
+# --- Public hostnames -----------------------------------------------------
+# Every app's hostname, by app. Not set here: they are real domain names tied
+# to one person, and this file is tracked in git. app_hostnames (and
+# optionally fleet_domain) are set in local.yml in this same directory,
+# gitignored like vault.yml - see local.yml.example. Neither gets a default in
+# this file, which Ansible reads after local.yml and would let win.
+fleet_hostnames: >-
+  {{ dict(apps | list | zip(apps | list
+       | map('regex_replace', '$', '.' ~ (fleet_domain | default('')))))
+     | combine(app_hostnames | default({})) }}
+
+# --- Secrets, from vault.yml ----------------------------------------------
+# One GitHub OAuth app for the whole fleet (docs/scaling-plan.md D4, D10).
+mcp_github_client_id: "{{ vault_mcp_github_client_id }}"
+mcp_github_client_secret: "{{ vault_mcp_github_client_secret }}"
+# Per host: each host runs its own named tunnel (D9).
+mcp_tunnel_id: "{{ vault_mcp_tunnel_id }}"
+mcp_tunnel_credentials: "{{ vault_mcp_tunnel_credentials }}"
+# Optional. Set, with fleet_cloudflare_zone in local.yml, for the playbook to
+# create each app's DNS record itself (D4).
+fleet_cloudflare_api_token: "{{ vault_cloudflare_api_token | default('') }}"

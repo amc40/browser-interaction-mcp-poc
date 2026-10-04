@@ -1,0 +1,61 @@
+---
+# Removes the single-app deployment from a host still running it, on the first
+# playbook run that finds it. Run between preparing the apps and starting them
+# (site.yml): its units hold the ports browser-mcp@sainsburys is about to use.
+#
+# Its state is not carried over. The site session only lasts about half an
+# hour, so it would be stale anyway, and without the OAuth store claude.ai just
+# has to authorise the connector once more. Both are cheaper than the code to
+# move them.
+- name: Look for the single-app deployment
+  ansible.builtin.stat:
+    path: /etc/systemd/system/{{ legacy_app_unit }}
+  register: legacy_unit_stat
+
+- name: Remove the single-app deployment
+  when: legacy_unit_stat.stat.exists
+  block:
+    - name: Stop and disable its long-running units
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - "{{ legacy_webhook_unit }}"
+        - "{{ legacy_app_unit }}"
+
+    # Static, with no [Install] section, so there is nothing to disable.
+    - name: Stop any deploy it had in flight
+      ansible.builtin.systemd_service:
+        name: "{{ legacy_deploy_unit }}"
+        state: stopped
+
+    # Removing the unit file is also what makes every later run skip this.
+    - name: Remove its units, sudoers rules and configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/{{ legacy_app_unit }}
+        - /etc/systemd/system/{{ legacy_webhook_unit }}
+        - /etc/systemd/system/{{ legacy_deploy_unit }}
+        - /etc/sudoers.d/deploy-webhook
+        - /etc/deploy-webhook
+        - /etc/browser-interaction-mcp
+
+    - name: Reload systemd without its units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not ansible_check_mode
+
+    - name: Report what is left to remove by hand
+      ansible.builtin.debug:
+        msg:
+          - "Removed {{ legacy_app_unit }} and its webhook;
+             browser-mcp@sainsburys.service starts next, on the same ports.
+             Reconnect the connector in claude.ai, and log in to the site
+             again through its login page."
+          - "Its data and accounts are left for removing by hand: sudo rm -rf
+             {{ legacy_state_dir }} {{ legacy_browsers_dir }}
+             /opt/browser-interaction-mcp /var/cache/uv /opt/uv; sudo userdel
+             browsermcp; sudo userdel -r deploy"

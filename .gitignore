@@ -22,7 +22,9 @@ htmlcov/
 *storage_state*.json
 
 # Ansible
-deploy/collections/
-deploy/inventory/group_vars/*/vault.yml
-deploy/inventory/group_vars/*/local.yml
-deploy/*.vault-pass
+fleet/.ansible/
+fleet/collections/
+fleet/inventory/group_vars/*/vault.yml
+fleet/inventory/group_vars/*/local.yml
+fleet/inventory/host_vars/*/vault.yml
+fleet/*.vault-pass

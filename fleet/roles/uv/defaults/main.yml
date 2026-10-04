@@ -1,0 +1,7 @@
+---
+# Pinned deliberately, and worth keeping in step with the uv_build pin in
+# pyproject.toml. The Pi is not the place to discover that a new uv resolves
+# differently.
+uv_version: "0.11.31"
+# Where fleet_uv, the path every app's deploy uses, points.
+uv_install_dir: "{{ fleet_uv | dirname }}"

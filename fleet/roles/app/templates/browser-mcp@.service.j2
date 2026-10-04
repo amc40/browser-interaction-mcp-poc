@@ -1,0 +1,57 @@
+# Managed by Ansible (app role) — local edits will be overwritten.
+#
+# One instance per app: browser-mcp@<app>.service. What differs between apps -
+# the command and its memory limit - is in each instance's drop-in,
+# browser-mcp@<app>.service.d/app.conf; everything else is the same for every
+# app, keyed by the instance name.
+[Unit]
+Description=browser MCP app %i — pre-approved browser actions over MCP
+Documentation=https://github.com/amc40/browser-interaction-mcp-poc
+After=network-online.target
+Wants=network-online.target
+# Refuse to start rather than write the browser profile to the SD card if the
+# SSD did not come up.
+RequiresMountsFor={{ fleet_state_root }}/%i
+StartLimitIntervalSec={{ app_start_limit_interval_sec }}
+StartLimitBurst={{ app_start_limit_burst }}
+
+[Service]
+Type=simple
+User={{ fleet_service_user_prefix }}%i
+Group={{ fleet_service_user_prefix }}%i
+Slice=browser-mcp.slice
+# Not the checkout: settings.py reads .env relative to the working directory.
+WorkingDirectory={{ fleet_state_root }}/%i
+EnvironmentFile={{ fleet_config_root }}/%i/env
+# ExecStart is in the drop-in: the console script differs per app.
+Restart=on-failure
+RestartSec={{ app_restart_sec }}
+
+# --- Sandboxing ------------------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ fleet_state_root }}/%i
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
+# Deliberately absent, because Chromium needs them:
+#   MemoryDenyWriteExecute — V8 maps executable pages for JIT.
+#   RestrictNamespaces     — the renderer sandbox uses user namespaces, and
+#                            blocking them means running with --no-sandbox,
+#                            which is a worse trade.
+#   SystemCallFilter       — @system-service blocks the clone flags that same
+#                            sandbox depends on.
+
+[Install]
+WantedBy=multi-user.target

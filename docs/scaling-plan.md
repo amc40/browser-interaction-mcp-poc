@@ -735,6 +735,41 @@ installed-but-stopped until the new one has served a real tool call.
 **Done when:** claude.ai calls `sainsburys_search` against the new unit, and
 `ps -o user=` shows `bmcp-sainsburys`.
 
+**What was built.** [`fleet/`](../fleet/README.md), as above. The "done when" is
+met once it has been run on the Pi; the steps are in the fleet README. Where it
+departs from the wording above:
+
+- **The migration does not move `storage_state`, or any state.** The first run
+  prepares the new app, then removes the old units and starts the new ones. With
+  one user and a proof of concept, a moment's downtime is fine, and the session
+  being protected above only lasts about half an hour: it would need a fresh
+  login anyway. Losing the OAuth store costs one reconnect of the connector. So
+  there is no copy, no rehearsed rollback and no old unit left installed.
+
+- **`apps.yml` has no hostnames.** They are personal, and `apps.yml` is tracked,
+  so they stay in the gitignored `local.yml` (`app_hostnames`, or `fleet_domain`
+  for `<app>.<domain>`), as the single hostname already did.
+- **Sainsbury's keeps its ports and its hostname.** So the tunnel's ingress does
+  not change and the connector is reconnected rather than re-added.
+- **Each app's webhook secret is generated on its host**, not vaulted (D6 had it
+  in the vault; the cost table above had it generated). CI holds each app's copy
+  in a GitHub environment named after the app.
+- **Per-app DNS records are optional.** Created through the Cloudflare API when a
+  DNS-scoped token is vaulted; otherwise the playbook prints the
+  `cloudflared tunnel route dns` commands, as before.
+- **CI has a gate job but no path filtering.** Every job still runs on every
+  change, so nothing needed the gate for the reason D1 gives; it went in anyway as
+  the one check branch protection has to require.
+- **A new browser build is not a code-only deploy.** The browsers directory is
+  root-owned (D3), so no deploy can write to it: `deploy.sh` refuses to restart
+  onto a build that is missing, and `--tags browser` installs it.
+- **The settings prefix stays `BROWSER_MCP_`.** D2 moved it to a per-app value
+  so two apps' environment files could not collide; with a file per app read only
+  by that app's unit, they cannot, and keeping it changed no key.
+- **Not done here:** sparse per-app checkouts (optional in D1), the per-app login
+  session secret (D10; it needs a setting in the code first), and the nightly
+  smoke timers (stage 5).
+
 ### Stage 4 — `bmcp new-site`, proven by a second site
 
 The scaffold command and the codegen importer — a generator that writes a new

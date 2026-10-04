@@ -1,0 +1,178 @@
+---
+# Provision every app in apps.yml onto the host it is assigned to, each behind
+# that host's named Cloudflare Tunnel. The architecture is
+# docs/scaling-plan.md; the single-host plan it grew from, and the mitigations
+# it still applies, are docs/pi-deployment.md and docs/deployment.md.
+#
+#   ansible-playbook site.yml --ask-become-pass --ask-vault-pass --check --diff   # first
+#   ansible-playbook site.yml --ask-become-pass --ask-vault-pass                  # then
+#
+# One run covers the whole fleet: the host-level roles run once per host, and
+# every per-app step loops over the apps assigned to that host. There is no
+# per-app playbook.
+- name: Provision the browser MCP fleet
+  hosts: browser_mcp
+  become: true
+  vars_files:
+    - apps.yml
+
+  pre_tasks:
+    - name: Assert the vaulted secrets are available
+      ansible.builtin.assert:
+        that:
+          - vault_mcp_github_client_id is defined
+          - vault_mcp_github_client_secret is defined
+          - vault_mcp_tunnel_id is defined
+          - vault_mcp_tunnel_credentials is defined
+        fail_msg: >-
+          Secrets are missing. Copy
+          inventory/group_vars/browser_mcp/vault.example.yml to vault.yml, fill
+          it in, encrypt it with `ansible-vault encrypt`, and pass
+          --ask-vault-pass (or --vault-password-file).
+        quiet: true
+      tags: [always]
+
+    # Catches the one placeholder most likely to survive into a real run: the
+    # tunnel role writes the tunnel ID and credentials straight over whatever is
+    # at /etc/cloudflared, including a real named tunnel already set up by
+    # hand, so a leftover example UUID would silently clobber it with nonsense
+    # rather than fail loudly.
+    - name: Assert the vaulted tunnel credentials aren't still the example
+      ansible.builtin.assert:
+        that:
+          - vault_mcp_tunnel_id != '00000000-0000-0000-0000-000000000000'
+        fail_msg: >-
+          vault_mcp_tunnel_id is still the placeholder UUID from
+          vault.example.yml. Set it to the real tunnel ID from `cloudflared
+          tunnel create` (and vault_mcp_tunnel_credentials to that command's
+          credentials file) before running this against a host that already
+          has a tunnel set up - otherwise this overwrites it.
+        quiet: true
+      tags: [always]
+
+    - name: Check apps.yml and local.yml
+      ansible.builtin.import_tasks: tasks/validate_apps.yml
+      tags: [always]
+
+    # A Pi 4 old enough to still be running a 32-bit userland needs a
+    # reinstall, not a workaround: Playwright ships no armhf browsers. Worth
+    # failing on before anything is installed.
+    - name: Assert a 64-bit userland
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['architecture'] == 'aarch64'
+        fail_msg: >-
+          This host reports {{ ansible_facts['architecture'] }}. Playwright
+          publishes no armhf browser builds, so a 64-bit Raspberry Pi OS
+          install is required.
+        quiet: true
+      tags: [always]
+
+    - name: Read the firmware throttling flags
+      ansible.builtin.command: vcgencmd get_throttled
+      register: fleet_throttled
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      tags: [always]
+
+    # Under-voltage on an always-on service surfaces as random unexplained
+    # failures, so it is worth saying out loud rather than diagnosing later.
+    # A warning, not a failure: the playbook still provisions correctly.
+    - name: Warn about under-voltage or throttling
+      ansible.builtin.debug:
+        msg: >-
+          {{ fleet_throttled.stdout }} - this Pi has been throttled or
+          under-volted. Use the official 3A PSU and a powered SSD enclosure
+          before treating slow page loads as flaky selectors.
+      when:
+        - fleet_throttled.rc == 0
+        - fleet_throttled.stdout is defined
+        - fleet_throttled.stdout != 'throttled=0x0'
+      tags: [always]
+
+  roles:
+    - role: base
+      tags: [base]
+    - role: storage
+      tags: [storage]
+    - role: uv
+      tags: [uv]
+    - role: browser
+      tags: [browser]
+
+  # Each app is fully prepared - accounts, checkout, venv, configuration -
+  # before any unit is started, and the single-app deployment, if this host
+  # still runs it, is removed just before the apps start, since its units hold
+  # the ports Sainsbury's is about to use.
+  tasks:
+    - name: Install the units every app shares
+      ansible.builtin.include_role:
+        name: app
+        tasks_from: units.yml
+        apply:
+          tags: [app]
+      tags: [app]
+
+    - name: Prepare each app
+      ansible.builtin.include_role:
+        name: app
+        tasks_from: prepare.yml
+        apply:
+          tags: [app]
+      loop: "{{ fleet_host_apps }}"
+      loop_control:
+        loop_var: app
+        label: "{{ app.key }}"
+      tags: [app]
+
+    - name: Download the browsers the apps' Playwright versions need
+      ansible.builtin.include_role:
+        name: browser
+        tasks_from: install.yml
+        apply:
+          tags: [browser]
+      tags: [browser]
+
+    - name: Remove the single-app deployment
+      ansible.builtin.include_role:
+        name: legacy
+        apply:
+          tags: [app]
+      tags: [app]
+
+    - name: Start each app
+      ansible.builtin.include_role:
+        name: app
+        tasks_from: start.yml
+        apply:
+          tags: [app]
+      loop: "{{ fleet_host_apps }}"
+      loop_control:
+        loop_var: app
+        label: "{{ app.key }}"
+      tags: [app]
+
+    - name: Route each app through this host's tunnel
+      ansible.builtin.include_role:
+        name: tunnel
+        apply:
+          tags: [tunnel]
+      tags: [tunnel]
+
+  post_tasks:
+    - name: Report what is left to do by hand
+      ansible.builtin.debug:
+        msg:
+          - "Connector URL for claude.ai, per app: https://{{ fleet_host_apps
+             | map(attribute='key') | map('extract', fleet_hostnames)
+             | join('/mcp, https://') }}/mcp"
+          - "Rate limit unauthenticated traffic at the Cloudflare edge: the
+             in-process limiter sits behind authentication by design."
+          - "Each app's code-only deploys need a GitHub environment named after
+             the app, holding DEPLOY_WEBHOOK_URL (https://<app hostname>/deploy-webhook)
+             and DEPLOY_WEBHOOK_SECRET. Set the secret without printing it:
+             ssh {{ ansible_host | default(inventory_hostname) }} sudo cat
+             {{ fleet_config_root }}/<app>/webhook-secret | gh secret set
+             DEPLOY_WEBHOOK_SECRET --env <app>. See fleet/README.md."
+      tags: [always]

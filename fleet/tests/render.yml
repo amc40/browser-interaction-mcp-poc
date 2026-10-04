@@ -1,0 +1,154 @@
+---
+# What CI can check of the fleet without a Pi: that apps.yml is valid, and
+# that every template renders against a fleet spanning two hosts and says what
+# it should. Runs
+# entirely on the control node and changes nothing outside a scratch directory.
+#
+#   cd fleet && ansible-playbook -i tests/inventory.yml tests/render.yml
+#
+# The real units, accounts and permissions are only ever exercised on the host,
+# which is why the first playbook run against one is --check --diff.
+
+- name: Check the real apps.yml
+  hosts: pi
+  gather_facts: false
+  vars_files:
+    - ../apps.yml
+    - ../inventory/group_vars/browser_mcp/vars.yml
+    - vars.yml
+  tasks:
+    - name: Check apps.yml and local.yml
+      ansible.builtin.import_tasks: ../tasks/validate_apps.yml
+
+- name: Render a two-host fleet
+  hosts: browser_mcp
+  gather_facts: false
+  vars_files:
+    - ../apps.yml
+    - sample_apps.yml
+    - ../inventory/group_vars/browser_mcp/vars.yml
+    - vars.yml
+    - ../roles/app/defaults/main.yml
+    - ../roles/app/vars/main.yml
+    - ../roles/tunnel/defaults/main.yml
+  vars:
+    render_root: "{{ lookup('ansible.builtin.env', 'FLEET_RENDER_DIR') or '/tmp/fleet-render' }}"
+    render_dir: "{{ render_root }}/{{ inventory_hostname }}"
+    render_templates: "{{ playbook_dir }}/../roles"
+    app_webhook_secret: test-webhook-secret
+  tasks:
+    - name: Check the sample fleet
+      ansible.builtin.import_tasks: ../tasks/validate_apps.yml
+
+    - name: Create the scratch directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: "{{ [render_dir] + (fleet_host_apps | map(attribute='key') | map('regex_replace', '^', render_dir ~ '/') | list) }}"
+
+    - name: Render the host's units and tunnel configuration
+      ansible.builtin.template:
+        src: "{{ render_templates }}/{{ item.role }}/templates/{{ item.name }}.j2"
+        dest: "{{ render_dir }}/{{ item.name }}"
+        mode: "0600"
+      loop:
+        - {role: app, name: browser-mcp.slice}
+        - {role: app, name: browser-mcp@.service}
+        - {role: app, name: browser-mcp-webhook@.service}
+        - {role: app, name: browser-mcp-deploy@.service}
+        - {role: tunnel, name: config.yml}
+        - {role: tunnel, name: cloudflared.service}
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Render each app's configuration
+      ansible.builtin.template:
+        src: "{{ render_templates }}/app/templates/{{ item.1 }}.j2"
+        dest: "{{ render_dir }}/{{ item.0.key }}/{{ item.1 }}"
+        mode: "0600"
+      vars:
+        app: "{{ item.0 }}"
+      loop: "{{ fleet_host_apps | product(['env', 'deploy.env', 'webhook.env', 'sudoers', 'app.conf']) | list }}"
+      loop_control:
+        label: "{{ item.0.key }}: {{ item.1 }}"
+
+    - name: Check the sudoers rules parse
+      ansible.builtin.command:
+        argv: [visudo, -cf, "{{ render_dir }}/{{ item.key }}/sudoers"]
+      loop: "{{ fleet_host_apps }}"
+      loop_control:
+        label: "{{ item.key }}"
+      changed_when: false
+
+    - name: Check each host routes exactly its own apps
+      vars:
+        render_ingress: "{{ lookup('ansible.builtin.file', render_dir ~ '/config.yml') | from_yaml }}"
+        render_expected: >-
+          {{ fleet_host_apps | map(attribute='key') | map('extract', fleet_hostnames) | list }}
+      ansible.builtin.assert:
+        that:
+          - render_ingress.tunnel == vault_mcp_tunnel_id
+          - render_ingress.ingress | length == 2 * (fleet_host_apps | length) + 1
+          - render_ingress.ingress | map(attribute='hostname', default='') | select | unique | list == render_expected
+          - render_ingress.ingress[-1].service == 'http_status:404'
+          - render_ingress.ingress[-1] | length == 1
+          - render_ingress.ingress[0].path == '^/deploy-webhook$'
+          - render_ingress.ingress[0].service == 'http://127.0.0.1:' ~ fleet_host_apps[0].value.webhook_port
+          - render_ingress.ingress[1].service == 'http://127.0.0.1:' ~ fleet_host_apps[0].value.port
+        quiet: true
+
+    - name: Check the slice holds the host's memory budget
+      ansible.builtin.assert:
+        that:
+          - "'MemoryMax=3072M' in lookup('ansible.builtin.file', render_dir ~ '/browser-mcp.slice')"
+        quiet: true
+
+    - name: Check each app's configuration
+      vars:
+        render_app_dir: "{{ render_dir }}/{{ item.key }}"
+        render_state: "/var/lib/browser-mcp/{{ item.key }}"
+        render_env: "{{ lookup('ansible.builtin.file', render_app_dir ~ '/env').splitlines() }}"
+        render_deploy: "{{ lookup('ansible.builtin.file', render_app_dir ~ '/deploy.env').splitlines() }}"
+        render_webhook: "{{ lookup('ansible.builtin.file', render_app_dir ~ '/webhook.env').splitlines() }}"
+        render_sudoers: "{{ lookup('ansible.builtin.file', render_app_dir ~ '/sudoers').splitlines() }}"
+        render_dropin: "{{ lookup('ansible.builtin.file', render_app_dir ~ '/app.conf').splitlines() }}"
+        # Exactly these two rules: this app's deploy account may restart this
+        # app's two units, and nothing else.
+        render_sudoers_expected:
+          - "bmcpd-{{ item.key }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart --no-block browser-mcp-deploy@{{ item.key }}.service"
+          - "bmcpd-{{ item.key }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart browser-mcp@{{ item.key }}.service"
+      ansible.builtin.assert:
+        that:
+          - ('BROWSER_MCP_PORT=' ~ item.value.port) in render_env
+          - ('BROWSER_MCP_GITHUB_OAUTH_BASE_URL=https://' ~ fleet_hostnames[item.key]) in render_env
+          - ('HOME=' ~ render_state) in render_env
+          - ('XDG_DATA_HOME=' ~ render_state ~ '/data') in render_env
+          - "'PLAYWRIGHT_BROWSERS_PATH=/var/lib/browser-mcp-playwright' in render_env"
+          - render_env | select('match', '^BROWSER_MCP_') | reject('match', '^BROWSER_MCP_[A-Z0-9_]+=') | list == []
+          - ('APP_DISTRIBUTION=browser-mcp-' ~ item.value.package) in render_deploy
+          - ('APP_SYSTEMD_UNIT=browser-mcp@' ~ item.key ~ '.service') in render_deploy
+          - ('UV_CACHE_DIR=/opt/browser-mcp/' ~ item.key ~ '/cache/uv') in render_deploy
+          - "'DEPLOY_WEBHOOK_SECRET=test-webhook-secret' in render_webhook"
+          - ('DEPLOY_WEBHOOK_PORT=' ~ item.value.webhook_port) in render_webhook
+          - ('DEPLOY_ONESHOT_UNIT=browser-mcp-deploy@' ~ item.key ~ '.service') in render_webhook
+          - render_sudoers | reject('match', '^(#|$)') | list == render_sudoers_expected
+          - ('ExecStart=/opt/browser-mcp/' ~ item.key ~ '/checkout/.venv/bin/' ~ item.value.console_script) in render_dropin
+          - ('MemoryHigh=' ~ item.value.memory_high_mb ~ 'M') in render_dropin
+        fail_msg: "{{ item.key }}'s rendered configuration in {{ render_app_dir }} is not what it should be."
+        quiet: true
+      loop: "{{ fleet_host_apps }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    # apps.yml's settings are templated against the app being rendered, and
+    # local.yml's are merged over them.
+    - name: Check Sainsbury's own settings
+      vars:
+        render_env: "{{ lookup('ansible.builtin.file', render_dir ~ '/sainsburys/env').splitlines() }}"
+      ansible.builtin.assert:
+        that:
+          - "'BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH=/var/lib/browser-mcp/sainsburys/sainsburys_storage_state.json' in render_env"
+          - "'BROWSER_MCP_SAINSBURYS_USERNAME=someone@example.test' in render_env"
+        quiet: true
+      when: inventory_hostname == 'pi'

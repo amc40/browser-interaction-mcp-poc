@@ -1,0 +1,32 @@
+---
+- name: Set the timezone
+  community.general.timezone:
+    name: "{{ base_timezone }}"
+
+- name: Update the apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Upgrade installed packages
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: true
+  when: base_upgrade_packages | bool
+
+- name: Install the base packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Configure unattended upgrades
+  ansible.builtin.include_tasks: unattended_upgrades.yml
+  when: base_unattended_upgrades | bool
+
+- name: Harden SSH
+  ansible.builtin.include_tasks: ssh.yml
+  when: base_harden_ssh | bool
+
+- name: Verify zram
+  ansible.builtin.include_tasks: zram.yml
+  when: base_zram_enabled | bool

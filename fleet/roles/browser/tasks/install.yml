@@ -1,0 +1,45 @@
+---
+# Into the one shared, root-owned browsers directory, as root, and only ever
+# from a playbook run: no app's deploy account can write there, so a deploy
+# can never replace a browser another app runs (docs/scaling-plan.md D3). The
+# cost is that a Playwright upgrade needing a new browser build is not a
+# code-only deploy - fleet/deploy.sh refuses to restart onto one that is
+# missing, and `--tags browser` installs it.
+#
+# Once per app, from that app's own venv, because apps' checkouts can be at
+# different commits (fleet/deploy-branch.sh) and so need different builds;
+# Playwright skips a build that is already there. Running an app's venv as
+# root trusts that app's deploy account as far as the single-app deployment
+# trusted its one; fleet/README.md lists it under the gaps.
+- name: Check which apps' venvs have Playwright
+  ansible.builtin.command:
+    argv:
+      - "{{ fleet_opt_root }}/{{ item.key }}/checkout/.venv/bin/python"
+      - -c
+      - import playwright
+  loop: "{{ fleet_host_apps }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: browser_playwright_present
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install the Playwright browsers
+  ansible.builtin.command:
+    argv:
+      - "{{ fleet_opt_root }}/{{ item.0.item.key }}/checkout/.venv/bin/playwright"
+      - install
+      - "{{ item.1 }}"
+  environment:
+    PLAYWRIGHT_BROWSERS_PATH: "{{ fleet_browsers_dir }}"
+  loop: >-
+    {{ browser_playwright_present.results | selectattr('rc', 'eq', 0)
+       | product(browser_playwright_browsers) | list }}
+  loop_control:
+    label: "{{ item.0.item.key }}: {{ item.1 }}"
+  register: browser_install
+  # Not idempotent - it reports work on every run - so the change is judged
+  # from its output rather than its exit code.
+  changed_when: (browser_install.stdout ~ browser_install.stderr) is search('[Dd]ownload')
+  when: not ansible_check_mode

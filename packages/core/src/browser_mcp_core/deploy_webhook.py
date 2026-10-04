@@ -1,16 +1,18 @@
-"""Webhook receiver that triggers a code-only redeploy on the Pi.
+"""Webhook receiver that triggers a code-only redeploy of one app.
 
 This is the fast path for "one Python file changed, ship it": GitHub Actions
 signs a small JSON body and POSTs it here after CI passes on `main`; this
 receiver checks the signature and asks systemd to run the actual
-git-pull/uv-sync/restart sequence (`deploy/deploy.sh`, via
-`deploy-browser-interaction-mcp.service`) — it never runs that sequence
-itself. Anything infra-shaped (new apt packages, systemd unit changes, tunnel
-config) is still an Ansible job; see docs/pi-deployment.md.
+git-pull/uv-sync/restart sequence (`fleet/deploy.sh`, via
+`browser-mcp-deploy@<app>.service`) — it never runs that sequence itself.
+Every app in the fleet runs its own receiver, as its own deploy account, with
+its own secret and port (`browser-mcp-webhook@<app>.service`). Anything
+infra-shaped (new apt packages, systemd unit changes, tunnel config) is still
+an Ansible job; see fleet/README.md.
 
 Deliberately dependency-free, and deliberately never imported as part of the
-`browser_mcp_core` package: on the Pi it is invoked directly by file path with
-the system interpreter —
+`browser_mcp_core` package: on the host it is invoked directly by file path
+with the system interpreter —
 
     /usr/bin/python3 <checkout>/packages/core/src/browser_mcp_core/deploy_webhook.py
 
@@ -42,11 +44,11 @@ _SIGNATURE_PREFIX: Final = "sha256="
 _MAX_BODY_BYTES: Final = 16 * 1024
 _EXPECTED_REF: Final = "refs/heads/main"
 _DEFAULT_PORT: Final = 8787
-# Only a fallback for standalone/local runs: on the Pi, main() always
-# overrides this from DEPLOY_ONESHOT_UNIT, which env.j2 sets from the same
-# Ansible variable (deploy_oneshot_systemd_unit) that actually names the
-# installed unit and its sudoers rule — so the two can never drift the way a
-# second hardcoded literal here would.
+# Only a fallback for standalone/local runs: on a host, main() always
+# overrides this from DEPLOY_ONESHOT_UNIT, which webhook.env.j2 sets from the
+# same Ansible variable (app_deploy_unit) that names the app's installed unit
+# and its sudoers rule — so the two can never drift the way a second hardcoded
+# literal here would.
 _DEFAULT_DEPLOY_UNIT: Final = "deploy-browser-interaction-mcp.service"
 
 
@@ -159,8 +161,8 @@ def main() -> None:
     """Serve the receiver on loopback until killed.
 
     Never binds anything but 127.0.0.1: the tunnel role's path-scoped
-    ingress rule is what makes this reachable at all, the same way the app
-    server itself is only ever reached through cloudflared.
+    ingress rule for the app is what makes this reachable at all, the same way
+    the app server itself is only ever reached through cloudflared.
     """
     logging.basicConfig(level=logging.INFO)
     Handler.secret = os.environ["DEPLOY_WEBHOOK_SECRET"].encode()
@@ -172,5 +174,5 @@ def main() -> None:
     server.serve_forever()
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised by running it on the Pi
+if __name__ == "__main__":  # pragma: no cover - exercised by running it on the host
     main()

@@ -1,0 +1,32 @@
+---
+# Everything about one app that follows from its name and its apps.yml entry.
+# Templated lazily, so each resolves against the `app` loop variable (an
+# apps.yml item: `key` is the name, `value` the entry) of whichever iteration
+# uses it - see site.yml's per-app loops.
+app_service_user: "{{ fleet_service_user_prefix }}{{ app.key }}"
+app_deploy_user: "{{ fleet_deploy_user_prefix }}{{ app.key }}"
+
+app_home: "{{ fleet_opt_root }}/{{ app.key }}"
+app_checkout_dir: "{{ app_home }}/checkout"
+app_python_dir: "{{ app_home }}/python"
+app_uv_cache_dir: "{{ app_home }}/cache/uv"
+app_config_dir: "{{ fleet_config_root }}/{{ app.key }}"
+# What {state_dir} stands for in apps.yml's `settings` values.
+app_state_dir: "{{ fleet_state_root }}/{{ app.key }}"
+
+app_distribution: "browser-mcp-{{ app.value.package }}"
+
+app_unit: "browser-mcp@{{ app.key }}.service"
+app_webhook_unit: "browser-mcp-webhook@{{ app.key }}.service"
+app_deploy_unit: "browser-mcp-deploy@{{ app.key }}.service"
+
+app_hostname: "{{ fleet_hostnames[app.key] }}"
+# TLS terminates at Cloudflare's edge, so FastMCP has to be told the public
+# https URL explicitly - it decides whether to mark OAuth cookies `Secure` by
+# testing this string, not by reading forwarded headers.
+app_oauth_base_url: "https://{{ app_hostname }}"
+
+# apps.yml's settings for the app, with local.yml's personal ones over them.
+app_settings_merged: >-
+  {{ app.value.settings | default({})
+     | combine((app_settings | default({}))[app.key] | default({})) }}

@@ -1,0 +1,24 @@
+---
+# A two-host fleet for render.yml: the real Sainsbury's entry on `pi`, and a
+# second app on `pi-02` that exists only to prove each host gets just its own
+# apps. Its package is a real one because validate_apps.yml checks for it; only
+# the rendering is under test.
+apps:
+  sainsburys:
+    host: pi
+    package: sainsburys
+    console_script: browser-interaction-mcp
+    port: 8000
+    webhook_port: 8787
+    headed: true
+    memory_high_mb: 1024
+    settings:
+      SAINSBURYS_STORAGE_STATE_PATH: "{state_dir}/sainsburys_storage_state.json"
+  second:
+    host: pi-02
+    package: sainsburys
+    console_script: browser-mcp-second
+    port: 8001
+    webhook_port: 8788
+    headed: false
+    memory_high_mb: 512
