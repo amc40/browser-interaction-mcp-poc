@@ -39,11 +39,21 @@ hard way. Each is a pattern, not a one-off.
   `account.sainsburys.co.uk/gol/login?login_challenge=...` (an Ory-style IdP).
   `goto(LOGIN_URL)` and then immediately filling fields races the redirect -
   wait for the actual form (`get_by_test_id("username")`) to be visible first.
-- **Decide "logged in?" by an element, never by the URL.** These SPAs redirect
-  *through* login-shaped URLs even on the **success** path - visiting an
-  account page triggers a silent session check that passes through
-  `/gol/login` before landing. A URL match ("am I on /gol/login?") gives false
-  failures. Check whether the login *form* is actually on screen.
+- **"Logged in?" can't be read off the first paint - wait out the redirect.**
+  Sainsbury's account page paints its full chrome - header, search box,
+  everything - for a dead session too, and only *then* runs a silent session
+  check that bounces it to `gol-ui/oauth/login` and on to
+  `account.sainsburys.co.uk`. Traced on the Pi, that landed under a second
+  after the search box appeared; the URL is still `/gol-ui/MyAccount` until
+  it does. So an element check gives false **passes**, and so does a URL
+  check made too early. What works: wait for the header, then give the
+  redirect a few seconds (`page.wait_for_url(<login regex>,
+  wait_until="commit")`) and treat "redirected" as logged out.
+- **Catch the mid-action redirect too.** If the session lapses just after
+  that check, the next `fill`/`press` triggers the bounce to login and times
+  out with an opaque Playwright error. Wrap the action, and on a timeout
+  re-check the URL - if it's on the login path, raise the "session expired"
+  error instead of a generic one.
 - **Same for MFA.** Detect the step by the verification-code field appearing,
   not by a `/mfa` URL fragment.
 - **Wait after every form submit that navigates**, including the OTP submit -
@@ -91,6 +101,15 @@ hard way. Each is a pattern, not a one-off.
   matters** - a leading-dot host cookie (`.www.example.com`) may land in the
   jar (`context.cookies()` shows it) yet not be visible to `document.cookie`
   on that host. Prefer the registrable domain.
+- **A loaded `storage_state` may be good for one use only.** Sainsbury's
+  replaces the session's token whenever the session is used, so a file that
+  is loaded but never written back is dead on its next use - which looks
+  exactly like "sessions expire after half an hour" if calls are spaced out,
+  and like "the login didn't work" if they aren't. Write
+  `context.storage_state()` back after every use, even a failed one (the
+  token was replaced either way), and serialise uses: two at once both start
+  from the same token. Diagnose it by loading the same file twice in a row
+  and watching the second bounce to login.
 
 ## Debugging aids that touch credentials
 

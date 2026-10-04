@@ -47,10 +47,10 @@ showed, and isn't obvious from the public pages alone:
 
 - `www.sainsburys.co.uk/gol-ui/oauth/login` is only a redirect shell now: it
   bounces to the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...`
-  (an Ory-style identity provider). It redirects through login-shaped URLs
-  even on the *success* path (a silent session check on the way to an account
-  page), so the login steps decide "logged in or not" by whether the login
-  *form* is on screen, never by the URL.
+  (an Ory-style identity provider). A dead session's account page paints its
+  full header *before* a silent session check bounces it there, so "logged in
+  or not" is decided by waiting out that redirect - see
+  `_raise_if_not_logged_in` - not by anything on screen.
 - The consent banner is OneTrust, injected asynchronously *after* the load
   event, with a full-page backdrop that blocks every click until it's
   actioned. Rather than race to dismiss it, `_consent_cookies` seeds the
@@ -89,14 +89,18 @@ Two things learned there that aren't obvious from the site alone:
 from __future__ import annotations
 
 import contextlib
+import logging
+import os
 import re
 import stat
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser_mcp_core.browser import browser_page
@@ -109,6 +113,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from playwright.sync_api import Locator, Page
+
+_logger = logging.getLogger(__name__)
 
 GROCERIES_URL = "https://www.sainsburys.co.uk/gol-ui/groceries"
 MY_ACCOUNT_URL = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
@@ -139,21 +145,30 @@ _NON_PRODUCT_HEADINGS = re.compile("^(carousel|copyright terms)$", re.IGNORECASE
 # `www.sainsburys.co.uk/gol-ui/oauth/login` is only a shell now: it bounces to
 # the real form on `account.sainsburys.co.uk/gol/login?login_challenge=...` (an
 # Ory-style identity provider). MFA, when Sainsbury's asks for it, is a further
-# step there. Both are detected by the elements they render, not their URL:
-# these SPAs redirect through login-shaped URLs even on the *success* path (a
-# silent session check), so a URL match gives false failures.
+# step there, detected by the verification-code field it renders.
 LOGIN_URL = "https://www.sainsburys.co.uk/gol-ui/oauth/login"
 
 
-# How long `_raise_if_not_logged_in` waits for the page to land on a definite
-# outcome, and how often it re-checks. A dead session's redirect to the real
-# login form can take several seconds; a single fixed pause was checking before
-# it landed, so an expired session slipped through here and only failed later,
-# on the first real interaction, as an opaque Playwright timeout instead of an
-# actionable "log in again".
-_SETTLE_POLL_MS = 500
-_SETTLE_TIMEOUT_MS = 20_000
-_SETTLE_CHECKS = _SETTLE_TIMEOUT_MS // _SETTLE_POLL_MS
+# A session Sainsbury's no longer accepts is sent to its identity provider:
+# first the groceries app's own login hop, then account.sainsburys.co.uk.
+_LOGIN_REDIRECT_URL = re.compile(
+    r"https://(www\.sainsburys\.co\.uk/gol-ui/oauth/|account\.sainsburys\.co\.uk/)"
+)
+
+# The account page paints its header - search box included - for a dead
+# session too, and only then runs the silent check that redirects it: traced
+# on the Pi, the redirect landed under a second after the search box showed.
+# So `_raise_if_not_logged_in` waits for the header, then gives the redirect
+# this long to start before believing it.
+_HEADER_TIMEOUT_MS = 20_000
+_REDIRECT_GRACE_MS = 5_000
+
+_SESSION_INVALID_MESSAGE = (
+    "The saved Sainsbury's session is no longer valid - it has expired, or the "
+    "account was signed out elsewhere. Ask the operator to re-authenticate by "
+    "opening /sainsburys-login on this server and signing in (or, running "
+    "locally, by rerunning scripts/sainsburys_login.py), then try again."
+)
 
 
 def _locate(scope: Page | Locator, locator_id: str) -> Locator:
@@ -168,30 +183,25 @@ def _locate(scope: Page | Locator, locator_id: str) -> Locator:
 def _raise_if_not_logged_in(
     page: Page, message: str, *, screenshot_path: Path | None = None
 ) -> None:
-    """Raise ``NotLoggedInError`` if the page settled on the login form.
+    """Raise ``NotLoggedInError`` if the page is sent to Sainsbury's login.
 
-    Waits for the page to settle on one of two outcomes - the logged-in site
-    header (its search box) or the login form - rather than deciding after a
-    fixed pause that can check too early. Reads the elements, never the URL: a
-    *successful* visit to an account page bounces back through the identity
-    provider's ``/gol/login`` URL for a silent session check, so a URL match
-    on its own gives false failures.
+    Neither the header nor the URL the page first lands on can tell a live
+    session from a dead one - see `_REDIRECT_GRACE_MS`. So this waits for the
+    header, then for a redirect to login, and only a page that is still off
+    the login path after both counts as logged in. If the header never shows
+    and nothing redirects, that is assumed logged in too: a genuinely broken
+    page then fails downstream with its own, more specific error.
     """
+    header_or_login_form = _locate(page, "header.search_box").or_(
+        _locate(page, "login.username")
+    )
     with contextlib.suppress(PlaywrightTimeoutError):
-        page.wait_for_load_state("domcontentloaded", timeout=15_000)
-
-    login_form = _locate(page, "login.username")
-    signed_in = _locate(page, "header.search_box")
-    for _ in range(_SETTLE_CHECKS):
-        if login_form.is_visible():
-            break
-        if signed_in.is_visible():
-            return
-        page.wait_for_timeout(_SETTLE_POLL_MS)
-    else:
-        # Neither outcome within the timeout: fall back to the prior behaviour
-        # of treating "no login form" as logged in. A genuinely broken page
-        # then fails downstream with its own, more specific error.
+        header_or_login_form.wait_for(state="visible", timeout=_HEADER_TIMEOUT_MS)
+    with contextlib.suppress(PlaywrightTimeoutError):
+        page.wait_for_url(
+            _LOGIN_REDIRECT_URL, wait_until="commit", timeout=_REDIRECT_GRACE_MS
+        )
+    if not _LOGIN_REDIRECT_URL.search(page.url):
         return
 
     if screenshot_path is not None:
@@ -338,16 +348,62 @@ def _check_logged_in(page: Page) -> None:
             the session in `storage_state` is missing, expired, or was
             never authenticated to begin with.
     """
-    _raise_if_not_logged_in(
-        page,
-        (
-            "The saved Sainsbury's session is no longer valid - it has expired, "
-            "or the account was signed out elsewhere. Ask the operator to "
-            "re-authenticate by opening /sainsburys-login on this server and "
-            "signing in (or, running locally, by rerunning "
-            "scripts/sainsburys_login.py), then try again."
-        ),
-    )
+    _raise_if_not_logged_in(page, _SESSION_INVALID_MESSAGE)
+
+
+# Sainsbury's replaces the session's token every time the session is used, so
+# the saved session is good for exactly one use unless what the browser ends up
+# holding is written back. Two calls at once would both start from the same
+# token, and the second to reach Sainsbury's would present one the first had
+# already replaced - so only one call uses the session at a time.
+_SESSION_LOCK = threading.Lock()
+
+
+def _modified_ns(path: Path) -> int | None:
+    """Return ``path``'s modification time, or ``None`` if it doesn't exist."""
+    with contextlib.suppress(FileNotFoundError):
+        return path.stat().st_mtime_ns
+    return None
+
+
+def _save_session(page: Page, storage_state_path: Path, loaded_ns: int | None) -> None:
+    """Write the session the browser now holds back over ``storage_state_path``.
+
+    Skipped if the page ended up on the identity provider (the session lapsed
+    mid-action, and saving it would only replace one dead session with
+    another), and if the file changed since it was loaded (a login replaced
+    it meanwhile, and is newer than anything this page holds). A failure is
+    logged rather than raised: the action has already happened - an item may
+    be in the basket - so failing the call now would misreport it.
+    """
+    if (
+        _LOGIN_REDIRECT_URL.search(page.url)
+        or _modified_ns(storage_state_path) != loaded_ns
+    ):
+        return
+    # Written beside the real file and renamed over it, so a crash mid-write
+    # can't leave a truncated session; created owner-only up front, because
+    # the file is as sensitive as the login that produced it.
+    temp_path = storage_state_path.with_name(f".{storage_state_path.name}.tmp")
+    try:
+        temp_path.unlink(missing_ok=True)
+        os.close(
+            os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+        )
+        page.context.storage_state(path=temp_path)
+        # Checked again as late as possible: the login runs in another
+        # process, which `_SESSION_LOCK` can't hold off.
+        if _modified_ns(storage_state_path) != loaded_ns:
+            temp_path.unlink()
+            return
+        temp_path.replace(storage_state_path)
+    except (OSError, PlaywrightError):
+        temp_path.unlink(missing_ok=True)
+        _logger.warning(
+            "Could not save the refreshed Sainsbury's session; the next call "
+            "will likely need a fresh login.",
+            exc_info=True,
+        )
 
 
 @contextlib.contextmanager
@@ -357,20 +413,37 @@ def _authenticated_page(storage_state_path: Path) -> Iterator[Page]:
     Shared by every action below that needs to be logged in
     (`search_products`, `add_to_basket`), so "how do we get an
     authenticated page" has exactly one definition - the two callers can't
-    drift into checking that differently.
+    drift into checking that differently. Saves the session back afterwards,
+    whether or not the action succeeded - see `_SESSION_LOCK`.
 
     Raises:
         NotLoggedInError: If the saved session is missing or not accepted.
     """
-    with browser_page(
-        headless=False,
-        storage_state=storage_state_path,
-        cookies=_consent_cookies(),
-    ) as page:
-        with contextlib.suppress(PlaywrightTimeoutError):
-            page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
-        _check_logged_in(page)
-        yield page
+    with _SESSION_LOCK:
+        loaded_ns = _modified_ns(storage_state_path)
+        with browser_page(
+            headless=False,
+            storage_state=storage_state_path,
+            cookies=_consent_cookies(),
+        ) as page:
+            with contextlib.suppress(PlaywrightTimeoutError):
+                page.goto(MY_ACCOUNT_URL, wait_until="load", timeout=25_000)
+            _check_logged_in(page)
+            try:
+                yield page
+            finally:
+                _save_session(page, storage_state_path, loaded_ns)
+
+
+def _raise_if_session_lapsed(page: Page, timeout: PlaywrightTimeoutError) -> None:
+    """Raise ``NotLoggedInError`` if ``timeout`` came from a bounce to login.
+
+    A session that lapses just after the check in `_authenticated_page` is
+    sent to login mid-action, which surfaces as whatever Playwright was
+    waiting on timing out; say so, rather than reporting that wait's failure.
+    """
+    if _LOGIN_REDIRECT_URL.search(page.url):
+        raise NotLoggedInError(_SESSION_INVALID_MESSAGE) from timeout
 
 
 def _run_search(page: Page, query: str) -> Locator:
@@ -386,17 +459,24 @@ def _run_search(page: Page, query: str) -> Locator:
         them.
 
     Raises:
+        NotLoggedInError: If the session lapsed between the check in
+            `_authenticated_page` and here, bouncing the page to login.
         RuntimeError: If no results are found.
     """
     search_box = _locate(page, "header.search_box")
-    search_box.click()
-    search_box.fill(query)
-    search_box.press("Enter")
+    try:
+        search_box.click()
+        search_box.fill(query)
+        search_box.press("Enter")
+    except PlaywrightTimeoutError as exc:
+        _raise_if_session_lapsed(page, exc)
+        raise
 
     tiles = _locate(page, "search.product_tile")
     try:
         _wait_for_page_to_settle(tiles.first)
     except PlaywrightTimeoutError as exc:
+        _raise_if_session_lapsed(page, exc)
         msg = f"No search results found for {query!r}."
         raise RuntimeError(msg) from exc
     return tiles

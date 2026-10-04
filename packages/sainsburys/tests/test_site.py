@@ -17,6 +17,7 @@ cannot fail them. The real lookup is covered in test_locators.py.
 from __future__ import annotations
 
 import contextlib
+import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +32,12 @@ from browser_mcp_sainsburys import site as sainsburys
 from browser_mcp_sainsburys.locators import LOCATORS
 
 if TYPE_CHECKING:
+    import re
     from collections.abc import Iterator
+
+# What `page.url` reads as once a dead session has been bounced to the identity
+# provider.
+_LOGIN_URL = "https://account.sainsburys.co.uk/login-ui/gol/login?login_challenge=abc"
 
 
 @dataclass
@@ -43,12 +49,10 @@ class FakeLocator:
     clicked: bool = False
     click_count: int = 0
     raises_on_wait: bool = False
+    raises_on_press: bool = False
     visible: bool = False
-    # Flip to visible once `is_visible` has been asked this many times - lets a
-    # test model an element that only appears after a poll or two (a login-page
-    # redirect that hasn't landed yet).
-    visible_after_checks: int = 0
-    _visibility_checks: int = field(default=0, init=False)
+    # What `or_` was last given: which other element a wait also accepted.
+    or_with: FakeLocator | None = None
     filled: str | None = None
     pressed_keys: list[str] = field(default_factory=list)
     heading: FakeLocator | None = None
@@ -82,7 +86,15 @@ class FakeLocator:
 
     def press(self, key: str) -> None:
         """Record a key pressed on this locator, as a search box."""
+        if self.raises_on_press:
+            msg = "Timeout pressing key"
+            raise PlaywrightTimeoutError(msg)
         self.pressed_keys.append(key)
+
+    def or_(self, other: FakeLocator) -> FakeLocator:
+        """Return a locator for either element, remembering ``other``."""
+        self.or_with = other
+        return FakeLocator(raises_on_wait=self.raises_on_wait and other.raises_on_wait)
 
     def inner_text(self) -> str:
         """Return the pre-wired text content."""
@@ -96,13 +108,8 @@ class FakeLocator:
             raise PlaywrightTimeoutError(msg)
 
     def is_visible(self) -> bool:
-        """Return the pre-wired visibility, honouring `visible_after_checks`."""
-        self._visibility_checks += 1
-        appeared_late = (
-            self.visible_after_checks > 0
-            and self._visibility_checks > self.visible_after_checks
-        )
-        return self.visible or appeared_late
+        """Return the pre-wired visibility."""
+        return self.visible
 
     def locate(self, locator_id: str) -> FakeLocator:
         """Return the element inside this tile that ``locator_id`` names."""
@@ -173,8 +180,8 @@ class FakePage:
     """A page that only knows the lookups `sainsburys.py` performs."""
 
     headings: list[FakeLocator] = field(default_factory=list)
-    # Visible by default: it lives in the logged-in site header, and its
-    # presence is how `_raise_if_not_logged_in` confirms a session is still good.
+    # Visible by default, even on a dead session: the account page paints its
+    # header before its silent session check bounces it to login.
     search_box: FakeLocator = field(default_factory=lambda: FakeLocator(visible=True))
     product_tiles: list[FakeLocator] = field(
         default_factory=lambda: [
@@ -191,6 +198,9 @@ class FakePage:
     submit_code_button: FakeLocator = field(default_factory=FakeLocator)
     context: FakeBrowserContext = field(default_factory=FakeBrowserContext)
     url: str = "https://www.sainsburys.co.uk/gol-ui/MyAccount"
+    # Where the page navigates to while something waits for a URL - a dead
+    # session's silent check bouncing it to login after the header painted.
+    redirects_to: str | None = None
     goto_calls: list[str] = field(default_factory=list)
     screenshot_path: object = None
 
@@ -212,6 +222,17 @@ class FakePage:
     def wait_for_timeout(self, timeout: int) -> None:
         """No-op: no real clock to wait on."""
         del timeout
+
+    def wait_for_url(
+        self, url: re.Pattern[str], *, wait_until: str, timeout: int
+    ) -> None:
+        """Follow `redirects_to`, then match `url`, or 'time out' if it doesn't."""
+        del wait_until, timeout
+        if self.redirects_to is not None:
+            self.url = self.redirects_to
+        if not url.search(self.url):
+            msg = f"Timeout waiting for URL matching {url.pattern!r}"
+            raise PlaywrightTimeoutError(msg)
 
     def screenshot(self, *, path: object) -> None:
         """Record that a debug screenshot was requested."""
@@ -524,7 +545,7 @@ def test_search_products_reports_no_image_when_the_tile_has_none(
 def test_search_products_raises_when_redirected_to_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(username_field=FakeLocator(visible=True))
+    page = FakePage(url=_LOGIN_URL)
     _wire(monkeypatch, page)
 
     with pytest.raises(NotLoggedInError, match=r"sainsburys_login\.py"):
@@ -533,16 +554,13 @@ def test_search_products_raises_when_redirected_to_login(
     assert not page.search_box.filled
 
 
-def test_search_products_waits_for_a_slow_login_redirect_before_deciding(
+def test_search_products_raises_when_login_follows_the_header(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The bug this guards: the bounce to the login form hadn't landed at the
-    # first check, so an expired session slipped through and only failed later,
-    # mid-search, as an opaque timeout. The settle loop must poll for it.
-    page = FakePage(
-        search_box=FakeLocator(visible=False),
-        username_field=FakeLocator(visible_after_checks=2),
-    )
+    # The bug this guards: a dead session's account page paints its header -
+    # search box included - and only then bounces to login, about a second
+    # later. Trusting the header let it through, to fail mid-search instead.
+    page = FakePage(redirects_to="https://www.sainsburys.co.uk/gol-ui/oauth/login")
     _wire(monkeypatch, page)
 
     with pytest.raises(NotLoggedInError, match="re-authenticate"):
@@ -551,12 +569,66 @@ def test_search_products_waits_for_a_slow_login_redirect_before_deciding(
     assert not page.search_box.filled
 
 
-def test_search_products_proceeds_when_the_page_never_settles(
+def test_search_products_raises_when_the_session_lapses_mid_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Neither the login form nor the header search box within the timeout: keep
-    # the prior behaviour of assuming logged in rather than erroring outright.
-    page = FakePage(search_box=FakeLocator(visible=False))
+    # The check passed, then the search's own navigation bounced the page to
+    # login: surface that as "re-authenticate", not "no results".
+    page = FakePage(url=_LOGIN_URL, product_tiles=[])
+    monkeypatch.setattr(sainsburys, "_check_logged_in", lambda _page: None)
+    _wire(monkeypatch, page)
+
+    with pytest.raises(NotLoggedInError, match="re-authenticate"):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
+
+
+def test_the_check_stops_waiting_for_the_header_once_the_login_form_shows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A page already sent to login never shows the header; waiting the full
+    # header timeout for it would add 20s to every "log in again".
+    page = FakePage(url=_LOGIN_URL)
+    _wire(monkeypatch, page)
+
+    with pytest.raises(NotLoggedInError):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
+
+    assert page.search_box.or_with is page.username_field
+
+
+def test_a_search_box_timeout_is_not_reported_as_no_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Something stopping the search being typed (an overlay, say) says
+    # nothing about whether the product exists.
+    page = FakePage(search_box=FakeLocator(visible=True, raises_on_press=True))
+    _wire(monkeypatch, page)
+
+    with pytest.raises(PlaywrightTimeoutError):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
+
+
+def test_a_search_box_timeout_on_the_login_page_is_a_lapsed_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = FakePage(
+        url=_LOGIN_URL,
+        search_box=FakeLocator(visible=True, raises_on_press=True),
+    )
+    monkeypatch.setattr(sainsburys, "_check_logged_in", lambda _page: None)
+    _wire(monkeypatch, page)
+
+    with pytest.raises(NotLoggedInError, match="re-authenticate"):
+        sainsburys.search_products(storage_state_path=Path("session.json"))
+
+
+def test_search_products_proceeds_when_the_header_never_shows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No header and no redirect within the timeout: assume logged in rather
+    # than erroring outright. A genuinely broken page fails downstream with
+    # its own, more specific error.
+    page = FakePage(search_box=FakeLocator(raises_on_wait=True))
     _wire(monkeypatch, page)
 
     results = sainsburys.search_products(storage_state_path=Path("session.json"))
@@ -888,7 +960,7 @@ def test_add_to_basket_seeds_consent_cookies(
 def test_add_to_basket_raises_when_redirected_to_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page = FakePage(username_field=FakeLocator(visible=True))
+    page = FakePage(url=_LOGIN_URL)
     _wire(monkeypatch, page)
 
     with pytest.raises(NotLoggedInError, match=r"sainsburys_login\.py"):
@@ -924,6 +996,183 @@ def test_add_to_basket_raises_when_the_result_has_no_add_control(
 
     with pytest.raises(RuntimeError, match='"add" control'):
         sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
+
+
+# ---------------------------------------------------------------------------
+# Saving the session back after each use
+# ---------------------------------------------------------------------------
+# Sainsbury's replaces the session's token every time it is used, so a session
+# that is loaded but never saved back is dead on its next use. FakeBrowserContext
+# writes "{}" wherever it is asked to save, standing in for the refreshed state.
+_OLD_SESSION = '{"cookies": "old"}'
+
+
+def _session_file(tmp_path: Path) -> Path:
+    path = tmp_path / "session.json"
+    path.write_text(_OLD_SESSION, encoding="utf-8")
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    return path
+
+
+def test_search_products_saves_the_refreshed_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == "{}"
+    assert stat.S_IMODE(session.stat().st_mode) == stat.S_IRUSR | stat.S_IWUSR
+    assert list(tmp_path.iterdir()) == [session]  # no temp file left behind
+
+
+def test_add_to_basket_saves_the_refreshed_session(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage()
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    sainsburys.add_to_basket("A Product", storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == "{}"
+
+
+def test_the_session_is_saved_even_when_the_action_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The token was replaced the moment the session was used, whether or not
+    # the search then found anything.
+    page = FakePage(product_tiles=[])
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    with pytest.raises(RuntimeError, match="No search results"):
+        sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == "{}"
+
+
+def test_a_session_that_fails_the_check_is_not_saved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(url=_LOGIN_URL)
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    with pytest.raises(NotLoggedInError):
+        sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == _OLD_SESSION
+
+
+def test_a_session_that_lapsed_mid_action_is_not_saved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    page = FakePage(url=_LOGIN_URL)
+    monkeypatch.setattr(sainsburys, "_check_logged_in", lambda _page: None)
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == _OLD_SESSION
+
+
+def test_a_login_during_the_action_is_not_overwritten(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    session = _session_file(tmp_path)
+    fresh_login = '{"cookies": "fresh login"}'
+
+    def log_in_meanwhile(_page: object) -> None:
+        session.write_text(fresh_login, encoding="utf-8")
+        mtime = session.stat().st_mtime_ns + 1_000_000_000
+        os.utime(session, ns=(mtime, mtime))
+
+    monkeypatch.setattr(sainsburys, "_check_logged_in", log_in_meanwhile)
+    _wire(monkeypatch, FakePage())
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == fresh_login
+
+
+def test_a_login_while_saving_is_not_overwritten(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    session = _session_file(tmp_path)
+    fresh_login = '{"cookies": "fresh login"}'
+    page = FakePage()
+
+    def save_while_a_login_lands(*, path: Path) -> None:
+        path.write_text("{}", encoding="utf-8")
+        session.write_text(fresh_login, encoding="utf-8")
+        mtime = session.stat().st_mtime_ns + 1_000_000_000
+        os.utime(session, ns=(mtime, mtime))
+
+    monkeypatch.setattr(page.context, "storage_state", save_while_a_login_lands)
+    _wire(monkeypatch, page)
+
+    sainsburys.search_products(storage_state_path=session)
+
+    assert session.read_text(encoding="utf-8") == fresh_login
+    assert list(tmp_path.iterdir()) == [session]
+
+
+def test_a_failed_save_is_logged_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The action already happened - an item may be in the basket - so failing
+    # the call now would misreport it.
+    page = FakePage()
+
+    def fail_to_save(*, path: Path) -> None:
+        del path
+        msg = "disk full"
+        raise OSError(msg)
+
+    monkeypatch.setattr(page.context, "storage_state", fail_to_save)
+    _wire(monkeypatch, page)
+    session = _session_file(tmp_path)
+
+    results = sainsburys.search_products(storage_state_path=session)
+
+    assert [match.name for match in results] == ["A Product"]
+    assert session.read_text(encoding="utf-8") == _OLD_SESSION
+    assert list(tmp_path.iterdir()) == [session]
+    assert "Could not save the refreshed Sainsbury's session" in caplog.text
+
+
+def test_one_session_use_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Two concurrent calls would both start from the same token; the second
+    # to reach Sainsbury's would present one the first had already replaced.
+    held: list[bool] = []
+
+    def record_lock(_page: object) -> None:
+        held.append(sainsburys._SESSION_LOCK.locked())
+
+    monkeypatch.setattr(sainsburys, "_check_logged_in", record_lock)
+    _wire(monkeypatch, FakePage())
+
+    sainsburys.search_products(storage_state_path=_session_file(tmp_path))
+
+    assert held == [True]
+    assert not sainsburys._SESSION_LOCK.locked()
 
 
 # ---------------------------------------------------------------------------
@@ -1045,7 +1294,7 @@ def test_refresh_session_raises_when_still_not_logged_in_afterwards(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    page = FakePage(username_field=FakeLocator(visible=True))
+    page = FakePage(url=_LOGIN_URL)
     _wire(monkeypatch, page)
     shot = tmp_path / "failure.png"
 
