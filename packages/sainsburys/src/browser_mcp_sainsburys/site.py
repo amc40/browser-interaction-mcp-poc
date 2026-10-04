@@ -66,10 +66,12 @@ showed, and isn't obvious from the public pages alone:
   `add_to_basket` handles: by the time it runs the session is already captured.
 - Search is a `combobox`, filled and submitted with Enter - not a URL query
   parameter.
-- Each search result is `data-testid="product-tile-<id>"`, and adding it to
-  the basket is `data-testid="add-button"` *inside that same tile* - directly
-  from the results, with no separate "Add to basket"-named button and no need
-  to open the product page first.
+- Each search result is a `data-testid="gw-product-card"` (it was
+  `product-tile-<id>` until the 2026-10-04 redesign, which also dropped the id
+  from the attribute - it is now the slug of the card's product link), and
+  adding it to the basket is `data-testid="gw-add-to-basket"` *inside that
+  same card* - directly from the results, with no separate "Add to
+  basket"-named button and no need to open the product page first.
 
 Verified against the real page from the deployment host (not this dev
 sandbox, whose network path Sainsbury's Akamai edge blocks outright - see
@@ -214,9 +216,10 @@ def _raise_if_not_logged_in(
     raise NotLoggedInError(message)
 
 
-# Search results render as `data-testid="product-tile-<id>"` (the table's
-# `search.product_tile`); this is the prefix a tile's own id is read back from.
-_TILE_ID_PREFIX = "product-tile-"
+# A result's own page is `/groceries/product/<slug>`, and the slug is its id: the
+# result cards carry no id attribute, but every one links there (the table's
+# `search.tile_link`).
+_PRODUCT_PATH = re.compile(r"/groceries/product/(?P<slug>[^/?#]+)")
 
 
 @dataclass(frozen=True)
@@ -539,8 +542,8 @@ def search_products(
         return matches
 
 
-# The results grid mixes in tiles that share the `product-tile-` testid prefix
-# but carry no product name heading (sponsored slots, "browse the aisle"
+# The results grid can mix in tiles that match the result-tile locator but
+# carry no product name heading (sponsored slots, "browse the aisle"
 # cards), and renders tiles past the first few lazily. Reading one of those
 # with Playwright's default 30s wait hangs the whole call, so a tile whose
 # heading hasn't shown within this is treated as "not a product" and skipped.
@@ -552,22 +555,26 @@ _TILE_HEADING_TIMEOUT_MS = 4_000
 _MAX_RESULT_TILES = 60
 
 
-def _tile_id(tile: Locator) -> str | None:
-    """Return the id embedded in a tile's own `data-testid`, or ``None``.
+def _product_id_from_href(href: str) -> str | None:
+    """Return the slug of a product page link, or ``None`` if it is not one."""
+    found = _PRODUCT_PATH.search(href)
+    return found["slug"] if found else None
 
-    The `search.product_tile` locator already guarantees the attribute exists
-    and starts with `_TILE_ID_PREFIX` for anything reaching this function - but
-    parsed defensively rather than trusting that never changes. ``None`` here
-    means `_product_match` raises rather than silently reporting a match with
-    no id, since - unlike a tile with no name heading, which is routinely a
-    sponsored slot or similar - a *readable* product tile with no parseable
-    id is a sign the markup itself has changed underneath the selector's
-    assumption, not a normal "not a product" case.
+
+def _tile_id(tile: Locator) -> str | None:
+    """Return the id of the product a result tile links to, or ``None``.
+
+    ``None`` here means `_product_match` raises rather than silently reporting
+    a match with no id, since - unlike a tile with no name heading, which is
+    routinely a sponsored slot or similar - a *readable* product tile with no
+    parseable id is a sign the markup itself has changed underneath the
+    selector's assumption, not a normal "not a product" case.
     """
-    raw = tile.get_attribute("data-testid")
-    if raw is None or not raw.startswith(_TILE_ID_PREFIX):
+    link = _locate(tile, "search.tile_link")
+    if link.count() == 0:
         return None
-    return raw.removeprefix(_TILE_ID_PREFIX) or None
+    href = link.get_attribute("href")
+    return None if href is None else _product_id_from_href(href)
 
 
 def _product_match(tile: Locator) -> ProductMatch | None:
@@ -599,7 +606,7 @@ def _product_match(tile: Locator) -> ProductMatch | None:
     if tile_id is None:
         msg = (
             f"Read a product name ({name!r}) from a result tile but no id from "
-            "its data-testid - the results page markup has probably changed."
+            "its product link - the results page markup has probably changed."
         )
         raise RuntimeError(msg)
     image = _locate(tile, "search.tile_image")
@@ -717,7 +724,7 @@ def add_to_basket(
     exact product avoids both, and this accepts two ways to do that:
 
     - `product_id`, a result's own id from `search_products` (its tile's
-      `data-testid`, e.g. `"7028441"` from `product-tile-7028441`) - the
+      product link's slug, e.g. `"sainsburys-spaghetti-pasta-500g"`) - the
       more robust choice when it's available. It names one specific product
       directly, so it isn't affected by anything happening to `product_name`
       before it gets here.

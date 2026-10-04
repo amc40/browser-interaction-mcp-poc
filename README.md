@@ -80,8 +80,8 @@ re-stock in between) in a way a name can't. Both tools share the same
 (`sainsburys.py`'s `_authenticated_page`, `_run_search`, `_product_match`) so
 they can't drift into disagreeing about what a given search actually returns.
 
-Each result also carries an `id` - Sainsbury's own id for the tile, read from
-its `data-testid="product-tile-<id>"` - and `sainsburys_add_to_basket` accepts
+Each result also carries an `id` - the slug of the product's own page
+(`/groceries/product/<slug>`), read from the result's link - and `sainsburys_add_to_basket` accepts
 it as an optional `product_id`. Passing it is the more robust way to add: it
 names that exact product directly, so unlike `product_name` it's never
 affected by anything happening to a name between `sainsburys_search`
