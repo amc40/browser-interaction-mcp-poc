@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware.authorization import AuthMiddleware
-from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 
 from browser_mcp_core.auth import build_auth_provider, github_user_id_is
 from browser_mcp_core.login_flow import LoginFlow
 from browser_mcp_core.login_oauth import BrowserGithubAuth, login_session_middleware
 from browser_mcp_core.login_routes import register_login_routes
 from browser_mcp_core.middleware import (
+    ErrorClassificationMiddleware,
     SecretRedactionMiddleware,
     ToolCallRateLimitingMiddleware,
 )
@@ -37,6 +37,15 @@ this server belongs to; calls from anybody else are refused.
 Only the actions exposed as tools are available; there is no general-purpose
 "navigate to this URL" or "run this script" escape hatch. Tool calls are
 rate limited, so expect throttling errors if you issue them in a tight loop.
+
+A failed call starts with `[<category> | retryable=<true|false>]`, then says
+what to do next. Repeat a call only when it says retryable=true, after a short
+wait. `site_login_required` means the operator's saved login for the site has
+lapsed: every other call will fail the same way, so stop and tell the operator
+rather than retrying. Calls against the logged-in site go through one browser
+session, so a lapsed login makes each call wait nearly a minute before it
+fails. When you have several calls to make, send one first, wait for it to
+succeed, and only then send the rest.
 """.strip()
 
 logger = logging.getLogger(__name__)
@@ -84,6 +93,11 @@ def build_server[SettingsT: CoreSettings](
     # error raised by any layer below it. It admits and rejects nobody, so it
     # does not disturb the ordering the two middlewares below rely on.
     mcp.add_middleware(SecretRedactionMiddleware(build_redactor(settings)))
+    # Directly inside it, so that what authorisation and rate limiting raise is
+    # put into the same shape as what a tool raises, and gets redacted too.
+    mcp.add_middleware(
+        ErrorClassificationMiddleware(include_details=settings.include_error_details),
+    )
     # Authorisation comes next: an unauthorised caller should not be able to
     # spend the operator's rate-limit budget, and the budget is server-wide.
     mcp.add_middleware(
@@ -95,12 +109,6 @@ def build_server[SettingsT: CoreSettings](
         ToolCallRateLimitingMiddleware(
             max_calls_per_second=settings.rate_limit_per_second,
             burst_capacity=settings.rate_limit_burst,
-        ),
-    )
-    mcp.add_middleware(
-        ErrorHandlingMiddleware(
-            logger=logger,
-            include_traceback=settings.include_error_details,
         ),
     )
 
