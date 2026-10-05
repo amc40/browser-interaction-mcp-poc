@@ -32,3 +32,9 @@ browser-mcp-core = { workspace = true }
 
 [tool.deptry]
 known_first_party = ["browser_mcp_sainsburys"]
+
+[tool.deptry.per_rule_ignores]
+# `fastmcp` is only imported under `TYPE_CHECKING` here (for `register_tools`'s
+# `mcp` parameter), which deptry does not see, but the type comes straight from
+# it so it stays a direct dependency.
+DEP002 = ["fastmcp"]

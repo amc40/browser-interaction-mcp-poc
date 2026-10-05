@@ -67,6 +67,34 @@ straight from its search-result tile (`data-testid="add-button"`) rather than
 needing to open the product's own page first. See `sainsburys.py`'s module
 docstring for the detail.
 
+### Errors
+
+A failed tool call starts with a header a model can act on without reading
+prose - the category and whether repeating the same call can help - then says
+what to do next:
+
+```
+[site_login_required | retryable=false] Session expired - re-authenticate at /sainsburys-login.
+Stop sending requests: every call to this site will fail the same way until the operator signs in again. Tell the operator.
+```
+
+| Category | Retryable | Meaning |
+|---|---|---|
+| `site_login_required` | no | The saved Sainsbury's login is missing or lapsed; the operator has to sign in again |
+| `not_found` | no | No results, or no result matching the name or id; change the query |
+| `unavailable` | no | The product exists but has no add control right now |
+| `site_changed` | no | The page no longer looks as expected; needs a code fix |
+| `timeout` | yes | The site was too slow; once, after a short wait |
+| `rate_limited` | yes | This server's own rate limit; wait a few seconds |
+| `invalid_request` | no | Bad arguments |
+| `caller_not_authorised` | no | The caller is not the account this server belongs to |
+| `internal` | no | Anything unclassified; the detail stays in the server log unless `BROWSER_MCP_INCLUDE_ERROR_DETAILS` is on |
+
+A lapsed login fails *every* call, and each one waits most of a minute to find
+out (calls share one browser session and run one at a time), so a caller with
+several calls to make should send one, wait for it to succeed, then send the
+rest. The server's instructions and the tool descriptions say so.
+
 `sainsburys_add_to_basket` no longer blindly adds a search's first result: it
 requires an exact `product_name`, matched against a result tile's heading
 (whitespace aside), and raises rather than guess if nothing matches. A third
@@ -251,7 +279,8 @@ fact that shell access on the host bypasses all of this.
 | `packages/core/src/browser_mcp_core/deploy_webhook.py` | Standalone webhook receiver that triggers a code-only redeploy of one app — not part of the running server |
 | `packages/core/src/browser_mcp_core/deploy_targets.py` | CI's choice of which apps a push to `main` redeploys |
 | `packages/core/src/browser_mcp_core/auth.py` | Who may use the server: the OAuth provider and the login check |
-| `packages/core/src/browser_mcp_core/middleware.py` | Tool-call rate limiting, and secret redaction on the error path |
+| `packages/core/src/browser_mcp_core/middleware.py` | Tool-call rate limiting, secret redaction on the error path, and the error classification below |
+| `packages/core/src/browser_mcp_core/errors.py` | The error categories, and how a failure is worded for the caller |
 | `packages/core/src/browser_mcp_core/redaction.py` | Keeping the server's own credentials out of logs and errors |
 | `packages/core/src/browser_mcp_core/settings.py` | `CoreSettings`, from `BROWSER_MCP_*` env vars or `.env`; a site subclasses it |
 | `packages/sainsburys/` | One site. A second site is a sibling directory |

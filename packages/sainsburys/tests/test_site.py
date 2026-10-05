@@ -28,7 +28,7 @@ import pytest
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser_mcp_core import login_steps
-from browser_mcp_core.errors import NotLoggedInError
+from browser_mcp_core.errors import ClassifiedError, ErrorCategory, NotLoggedInError
 from browser_mcp_sainsburys import site as sainsburys
 from browser_mcp_sainsburys.locators import LOCATORS
 
@@ -38,6 +38,15 @@ if TYPE_CHECKING:
 # What `page.url` reads as once a dead session has been bounced to the identity
 # provider.
 _LOGIN_URL = "https://account.sainsburys.co.uk/login-ui/gol/login?login_challenge=abc"
+
+
+@contextlib.contextmanager
+def _fails_as(category: ErrorCategory, *, match: str) -> Iterator[None]:
+    """Expect a classified failure of ``category``, never worth repeating as is."""
+    with pytest.raises(ClassifiedError, match=match) as raised:
+        yield
+    assert raised.value.category is category
+    assert not raised.value.retryable
 
 
 @dataclass
@@ -409,7 +418,7 @@ def test_raises_when_no_heading_is_found(monkeypatch: pytest.MonkeyPatch) -> Non
     page = FakePage(headings=[_heading("Welcome to Sainsbury's")])
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match=r"No .* heading found"):
+    with _fails_as(ErrorCategory.SITE_CHANGED, match=r"No .* heading found"):
         sainsburys.products_we_love()
 
 
@@ -497,7 +506,7 @@ def test_search_products_raises_when_a_readable_tile_has_no_id(
     )
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match=r"No Id Product.*no id"):
+    with _fails_as(ErrorCategory.SITE_CHANGED, match=r"No Id Product.*no id"):
         sainsburys.search_products(storage_state_path=Path("session.json"))
 
 
@@ -685,7 +694,7 @@ def test_search_products_raises_when_no_results_are_found(
     page = FakePage(product_tiles=[])
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match="No search results"):
+    with _fails_as(ErrorCategory.NOT_FOUND, match="No search results"):
         sainsburys.search_products(
             "a nonexistent product", storage_state_path=Path("session.json")
         )
@@ -739,7 +748,7 @@ def test_search_products_raises_when_tiles_are_present_but_none_are_readable(
     )
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match="markup has probably changed"):
+    with _fails_as(ErrorCategory.SITE_CHANGED, match="markup has probably changed"):
         sainsburys.search_products(storage_state_path=Path("session.json"))
 
 
@@ -830,7 +839,7 @@ def test_add_to_basket_raises_when_no_result_matches_exactly(
     )
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match="No search result exactly matches"):
+    with _fails_as(ErrorCategory.NOT_FOUND, match="No search result exactly matches"):
         sainsburys.add_to_basket(
             "Fairy Lemon Washing Up Liquid", storage_state_path=Path("session.json")
         )
@@ -882,7 +891,7 @@ def test_add_to_basket_still_raises_when_an_ellipsis_prefix_matches_nothing(
     )
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match="No search result exactly matches"):
+    with _fails_as(ErrorCategory.NOT_FOUND, match="No search result exactly matches"):
         sainsburys.add_to_basket(
             "Fairy Lemon Washing Up...", storage_state_path=Path("session.json")
         )
@@ -932,7 +941,7 @@ def test_add_to_basket_raises_when_no_result_has_the_given_id(
     )
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match="No search result has id"):
+    with _fails_as(ErrorCategory.NOT_FOUND, match="No search result has id"):
         sainsburys.add_to_basket(
             "washing up liquid",
             product_id="1234567",
@@ -1018,7 +1027,7 @@ def test_add_to_basket_raises_when_no_results_are_found(
     page = FakePage(product_tiles=[])
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match="No search results"):
+    with _fails_as(ErrorCategory.NOT_FOUND, match="No search results"):
         sainsburys.add_to_basket(
             "a nonexistent product", storage_state_path=Path("session.json")
         )
@@ -1037,7 +1046,7 @@ def test_add_to_basket_raises_when_the_result_has_no_add_control(
     )
     _wire(monkeypatch, page)
 
-    with pytest.raises(RuntimeError, match='"add" control'):
+    with _fails_as(ErrorCategory.UNAVAILABLE, match='"add" control'):
         sainsburys.add_to_basket("A Product", storage_state_path=Path("session.json"))
 
 
@@ -1095,7 +1104,7 @@ def test_the_session_is_saved_even_when_the_action_fails(
     _wire(monkeypatch, page)
     session = _session_file(tmp_path)
 
-    with pytest.raises(RuntimeError, match="No search results"):
+    with _fails_as(ErrorCategory.NOT_FOUND, match="No search results"):
         sainsburys.search_products(storage_state_path=session)
 
     assert session.read_text(encoding="utf-8") == "{}"
