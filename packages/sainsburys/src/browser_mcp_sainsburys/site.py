@@ -610,7 +610,10 @@ def _product_match(tile: Locator) -> ProductMatch | None:
         )
         raise RuntimeError(msg)
     image = _locate(tile, "search.tile_image")
-    image_url = image.get_attribute("src") if image.count() > 0 else None
+    # The `src` property rather than the attribute: the attribute is whatever
+    # the markup says, and on most of the results page that is a path with no
+    # host, which a caller can't render.
+    image_url = (image.evaluate("img => img.src") or None) if image.count() else None
     return ProductMatch(name=name, id=tile_id, image_url=image_url)
 
 
