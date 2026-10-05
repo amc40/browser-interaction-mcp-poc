@@ -128,15 +128,18 @@ class FakeLocator:
         assert locator_id == "search.tile_image", f"unexpected id {locator_id!r}"
         return self if self.has_image else FakeLocator(count_=0)
 
+    def evaluate(self, expression: str) -> str:
+        """Return the image's resolved `src`, as a browser reports it: absolute."""
+        assert expression == "img => img.src", f"unexpected script {expression!r}"
+        return self.image_src or ""
+
     def get_attribute(self, name: str) -> str | None:
         """Return this (image or tile) locator's pre-wired attribute.
 
-        `src` and `href` are read off the same object in practice - a tile
-        *is* its own "img" and link locator here (see `locate`) - so both are
-        handled here rather than needing separate fakes.
+        A tile *is* its own link locator here (see `locate`). The image's
+        `src` is deliberately not readable as an attribute: that is the raw
+        markup, relative on much of the page, so only `evaluate` is allowed.
         """
-        if name == "src":
-            return self.image_src
         if name == "href":
             return f"/groceries/product/{self.tile_id}"
         msg = f"unexpected attribute {name!r}"
