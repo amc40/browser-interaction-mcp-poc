@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,7 +33,6 @@ from browser_mcp_sainsburys import site as sainsburys
 from browser_mcp_sainsburys.locators import LOCATORS
 
 if TYPE_CHECKING:
-    import re
     from collections.abc import Iterator
 
 # What `page.url` reads as once a dead session has been bounced to the identity
@@ -59,11 +59,11 @@ class FakeLocator:
     add_button: FakeLocator | None = None
     image_src: str | None = "https://example.invalid/product.jpg"
     has_image: bool = True
-    # This tile's own id, as it would appear in `data-testid="product-tile-<id>"`.
+    # This tile's own id, as the slug in its product link's `href`.
     # Defaulted rather than `None`, since a real product tile always has one -
     # `_product_match` treats a tile it can't read an id from as unreadable,
     # same as one with no name heading. Set to `None` only to simulate that.
-    tile_id: str | None = "9999999"
+    tile_id: str | None = "a-product-500g"
 
     @property
     def first(self) -> FakeLocator:
@@ -121,21 +121,27 @@ class FakeLocator:
                 if self.add_button is not None
                 else FakeLocator(count_=0)
             )
+        # A tile *is* its own link locator too - see `get_attribute`.
+        if locator_id == "search.tile_link":
+            return self if self.tile_id is not None else FakeLocator(count_=0)
         # A tile *is* its own image locator here - see `get_attribute`.
         assert locator_id == "search.tile_image", f"unexpected id {locator_id!r}"
         return self if self.has_image else FakeLocator(count_=0)
 
+    def evaluate(self, expression: str) -> str:
+        """Return the image's resolved `src`, as a browser reports it: absolute."""
+        assert expression == "img => img.src", f"unexpected script {expression!r}"
+        return self.image_src or ""
+
     def get_attribute(self, name: str) -> str | None:
         """Return this (image or tile) locator's pre-wired attribute.
 
-        `src` and `data-testid` are read off the same object in practice - a
-        tile *is* its own "img" locator here (see `locator`) - so both are
-        handled here rather than needing separate fakes.
+        A tile *is* its own link locator here (see `locate`). The image's
+        `src` is deliberately not readable as an attribute: that is the raw
+        markup, relative on much of the page, so only `evaluate` is allowed.
         """
-        if name == "src":
-            return self.image_src
-        if name == "data-testid":
-            return None if self.tile_id is None else f"product-tile-{self.tile_id}"
+        if name == "href":
+            return f"/groceries/product/{self.tile_id}"
         msg = f"unexpected attribute {name!r}"
         raise AssertionError(msg)
 
@@ -495,6 +501,41 @@ def test_search_products_raises_when_a_readable_tile_has_no_id(
         sainsburys.search_products(storage_state_path=Path("session.json"))
 
 
+@pytest.mark.parametrize(
+    ("href", "expected"),
+    [
+        (
+            "/groceries/product/sainsburys-spaghetti-pasta-500g",
+            "sainsburys-spaghetti-pasta-500g",
+        ),
+        ("https://www.sainsburys.co.uk/groceries/product/a-500g?x=1#top", "a-500g"),
+        ("/groceries/product/a-500g/", "a-500g"),
+        ("/gol-ui/offers/save-25-percent", None),
+        ("/groceries/product/", None),
+        ("", None),
+    ],
+)
+def test_product_id_is_the_slug_of_the_product_link(
+    href: str, expected: str | None
+) -> None:
+    assert sainsburys._product_id_from_href(href) == expected
+
+
+def test_product_ids_read_from_the_captured_results_page() -> None:
+    """The links on a real results page (2026-10-04) all yield an id."""
+    fixture = Path(__file__).parent / "fixtures" / "search_results.html"
+    hrefs = re.findall(
+        r'<a [^>]*data-testid="gw-product-name"[^>]*href="([^"]*)"',
+        fixture.read_text(encoding="utf-8"),
+    )
+
+    assert [sainsburys._product_id_from_href(href) for href in hrefs] == [
+        "sainsburys-bucatini-spaghetti-pasta-taste-the-difference-500g",
+        "sainsburys-fusilli-bucati-lunghi-taste-the-difference-500g",
+        "sainsburys-spaghetti-pasta-500g",
+    ]
+
+
 def test_search_products_honours_a_smaller_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -538,7 +579,9 @@ def test_search_products_reports_no_image_when_the_tile_has_none(
     results = sainsburys.search_products(storage_state_path=Path("session.json"))
 
     assert results == [
-        sainsburys.ProductMatch(name="No Photo Product", id="9999999", image_url=None)
+        sainsburys.ProductMatch(
+            name="No Photo Product", id="a-product-500g", image_url=None
+        )
     ]
 
 

@@ -73,11 +73,17 @@ hard way. Each is a pattern, not a one-off.
 ## Result lists / grids
 
 - **A list selector matches more than the leaf items.** Sainsbury's search
-  results are `data-testid="product-tile-<id>"`, but the same prefix also
-  covers sponsored slots and "browse the aisle" cards that carry no product
+  results were `data-testid="product-tile-<id>"`, but that prefix also
+  covered sponsored slots and "browse the aisle" cards that carry no product
   name heading. Reading `.nth(1).get_by_role("heading").first.inner_text()`
   on one of those blocks for Playwright's **full 30s default** and takes the
   whole call down with it.
+- **Don't hang an id on the markup you select by.** Sainsbury's result tiles
+  carried their product id in their own `data-testid`, so when a redesign
+  replaced that with a fixed value the selector *and* the id parsing broke
+  together - and the id parsing is code, which a locator-only heal can't
+  change. Read an id from something that is meant to be stable (the product
+  page link) and give it its own locator row.
 - **Only the first item is guaranteed rendered** when your "results are
   ready" wait fires - later tiles fill in lazily. Waiting on `tiles.first`
   and then iterating `tiles.all()` reads tiles that are still skeletons.

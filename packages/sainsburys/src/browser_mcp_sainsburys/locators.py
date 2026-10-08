@@ -56,15 +56,23 @@ LOCATORS: Mapping[str, LocatorSpec] = {
     ),
     # --- Search results --------------------------------------------------------
     "search.product_tile": LocatorSpec(
-        # The site's code reads each tile's id back out of this attribute, after
-        # the `product-tile-` prefix, so a replacement must keep matching it.
-        ByCss('[data-testid^="product-tile-"]'),
-        "Every search result tile, in the order the page lists them. Includes "
-        "non-product tiles (sponsored slots), which have no name heading.",
+        # The 2026-10-04 redesign (tests/fixtures/search_results.html) dropped
+        # the `product-tile-<id>` testids for a fixed one with no id in it;
+        # ids now come from each tile's `search.tile_link`.
+        ByTestId("gw-product-card"),
+        "Every search result's product card, in the order the page lists them. "
+        "Sponsored banners in the grid are not product cards and are not matched.",
     ),
     "search.tile_name": LocatorSpec(
         ByRole("heading"),
         "Within one result tile: the heading holding the product's name.",
+        first=True,
+    ),
+    "search.tile_link": LocatorSpec(
+        ByTestId("gw-product-name"),
+        "Within one result tile: the link to the product's own page. The site's "
+        "code reads the product's id from its `href`, the slug after "
+        "`/groceries/product/`, so a replacement must keep that shape.",
         first=True,
     ),
     "search.tile_image": LocatorSpec(
@@ -74,9 +82,10 @@ LOCATORS: Mapping[str, LocatorSpec] = {
         first=True,
     ),
     "search.add_button": LocatorSpec(
-        ByTestId("add-button"),
+        ByTestId("gw-add-to-basket"),
         "Within one result tile: its own add-to-basket control, clicked once per "
-        "unit of quantity.",
+        "unit of quantity. A product already in the trolley shows a quantity "
+        "counter in its place.",
     ),
     # --- The public groceries page ---------------------------------------------
     "groceries.products_we_love_heading": LocatorSpec(
