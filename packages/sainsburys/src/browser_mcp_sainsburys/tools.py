@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastmcp.exceptions import ToolError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import BaseModel, Field
 
-from browser_mcp_core.errors import NotLoggedInError
+from browser_mcp_core.errors import ClassifiedError, ErrorCategory, NotLoggedInError
 from browser_mcp_sainsburys import site
 
 if TYPE_CHECKING:
@@ -71,19 +71,18 @@ class AddedToBasket(BaseModel):
     product: str = Field(description="Name of the product added, as shown on its page.")
 
 
-def _guard_session[T](action: Callable[[], T]) -> T:
-    """Run a browser action, surfacing a missing or stale session usefully.
+def _classify_timeouts[T](action: Callable[[], T]) -> T:
+    """Run a browser action, reporting a page that was too slow as retryable.
 
-    `NotLoggedInError` is a plain `RuntimeError`, so a server with
-    error masking on - every deployed one - would collapse its message to a
-    bare "internal error". Re-raising as `ToolError` keeps the message (which
-    tells the caller to get the operator to re-authenticate at
-    `/sainsburys-login`) intact through the mask.
+    Playwright's timeout carries a locator and a call log that mean nothing to
+    the caller and are not written for it, so it is replaced rather than passed
+    on. Every other failure is classified where it is raised, or is `internal`.
     """
     try:
         return action()
-    except NotLoggedInError as exc:
-        raise ToolError(str(exc)) from exc
+    except PlaywrightTimeoutError as exc:
+        msg = "Sainsbury's did not respond in time."
+        raise ClassifiedError(msg, ErrorCategory.TIMEOUT, retryable=True) from exc
 
 
 def register_tools(mcp: FastMCP, settings: SainsburysSettings, version: str) -> None:
@@ -123,7 +122,9 @@ def register_tools(mcp: FastMCP, settings: SainsburysSettings, version: str) -> 
         Reads the public, unauthenticated groceries homepage
         (site.co.uk/gol-ui/groceries) - no login or credentials involved.
         """
-        return ProductsWeLove(products=site.products_we_love())
+        return ProductsWeLove(
+            products=_classify_timeouts(site.products_we_love),
+        )
 
     @mcp.tool(
         annotations={"readOnlyHint": True, "openWorldHint": True},
@@ -145,9 +146,12 @@ def register_tools(mcp: FastMCP, settings: SainsburysSettings, version: str) -> 
         server hasn't approved in code.
 
         Needs an already-authenticated Sainsbury's session - see
-        `sainsburys_add_to_basket`'s docstring for how to capture one.
+        `sainsburys_add_to_basket`'s docstring for how to capture one. If you
+        have several calls to make, send this one first and wait for it to
+        succeed before sending the rest: a lapsed session fails every call the
+        same way, each after most of a minute, and calls run one at a time.
         """
-        product_matches = _guard_session(
+        product_matches = _classify_timeouts(
             lambda: site.search_products(
                 query, storage_state_path=_require_storage_state()
             ),
@@ -200,10 +204,14 @@ def register_tools(mcp: FastMCP, settings: SainsburysSettings, version: str) -> 
         server - by visiting `<server>/sainsburys-login` in a browser and
         signing in there. Either way `BROWSER_MCP_SAINSBURYS_STORAGE_STATE_PATH`
         has to point at the result. This tool itself never sees a password -
-        it only replays a captured session, and raises if none is set up or
-        the saved one is no longer accepted.
+        it only replays a captured session, and fails with
+        `site_login_required` if none is set up or the saved one is no longer
+        accepted. If you are adding several products, add the first and wait
+        for it to succeed before sending the rest: a lapsed session fails every
+        call the same way, each after most of a minute, and calls run one at a
+        time.
         """
-        product = _guard_session(
+        product = _classify_timeouts(
             lambda: site.add_to_basket(
                 product_name,
                 product_id=product_id,

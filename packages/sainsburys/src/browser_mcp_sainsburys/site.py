@@ -106,7 +106,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser_mcp_core.browser import browser_page
-from browser_mcp_core.errors import NotLoggedInError
+from browser_mcp_core.errors import ClassifiedError, ErrorCategory, NotLoggedInError
 from browser_mcp_core.locator_table import resolve
 from browser_mcp_sainsburys.locators import LOCATORS
 
@@ -294,7 +294,7 @@ def _names_after_heading(headings: list[str], count: int) -> list[str]:
             "section has been renamed/removed, or the page did not load as "
             "expected."
         )
-        raise RuntimeError(msg)
+        raise ClassifiedError(msg, ErrorCategory.SITE_CHANGED, retryable=False)
 
     names: list[str] = []
     for text in headings[index + 1 :]:
@@ -481,7 +481,7 @@ def _run_search(page: Page, query: str) -> Locator:
     except PlaywrightTimeoutError as exc:
         _raise_if_session_lapsed(page, exc)
         msg = f"No search results found for {query!r}."
-        raise RuntimeError(msg) from exc
+        raise ClassifiedError(msg, ErrorCategory.NOT_FOUND, retryable=False) from exc
     return tiles
 
 
@@ -538,7 +538,7 @@ def search_products(
                 f"Found result tiles for {query!r} but read a product name from "
                 "none of them - the results page markup has probably changed."
             )
-            raise RuntimeError(msg)
+            raise ClassifiedError(msg, ErrorCategory.SITE_CHANGED, retryable=False)
         return matches
 
 
@@ -608,7 +608,7 @@ def _product_match(tile: Locator) -> ProductMatch | None:
             f"Read a product name ({name!r}) from a result tile but no id from "
             "its product link - the results page markup has probably changed."
         )
-        raise RuntimeError(msg)
+        raise ClassifiedError(msg, ErrorCategory.SITE_CHANGED, retryable=False)
     image = _locate(tile, "search.tile_image")
     # The `src` property rather than the attribute: the attribute is whatever
     # the markup says, and on most of the results page that is a path with no
@@ -793,7 +793,7 @@ def add_to_basket(
                     "exactly, including capitalisation and punctuation - or "
                     "its `id` instead."
                 )
-            raise RuntimeError(msg)
+            raise ClassifiedError(msg, ErrorCategory.NOT_FOUND, retryable=False)
         tile, matched_name = found
 
         add_button = _locate(tile, "search.add_button")
@@ -802,7 +802,7 @@ def add_to_basket(
                 f'No "add" control found on the result for {product_name!r}. '
                 "Either the page has changed, or the product is unavailable."
             )
-            raise RuntimeError(msg)
+            raise ClassifiedError(msg, ErrorCategory.UNAVAILABLE, retryable=False)
 
         for _ in range(quantity):
             add_button.click(timeout=15_000)

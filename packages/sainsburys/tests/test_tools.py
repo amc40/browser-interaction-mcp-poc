@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from browser_mcp_core.errors import NotLoggedInError
 from browser_mcp_core.server import build_server
@@ -128,6 +129,66 @@ async def test_sainsburys_search_reports_a_stale_session_through_error_masking(
     async with Client(build_server(SITE, settings)) as client:
         with pytest.raises(ToolError, match="/sainsburys-login"):
             await client.call_tool("sainsburys_search", {"query": "milk"})
+
+
+async def test_a_stale_session_is_reported_as_needing_the_operator(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticate: Authenticate,
+    tmp_path: Path,
+) -> None:
+    authenticate()
+    storage_state_path = tmp_path / "session.json"
+    storage_state_path.write_text("{}", encoding="utf-8")
+    settings = SainsburysSettings(sainsburys_storage_state_path=storage_state_path)
+
+    def stale(query: str, *, storage_state_path: Path) -> list[site.ProductMatch]:
+        del query, storage_state_path
+        msg = "Session expired - re-authenticate at /sainsburys-login."
+        raise NotLoggedInError(msg)
+
+    monkeypatch.setattr(site, "search_products", stale)
+
+    async with Client(build_server(SITE, settings)) as client:
+        with pytest.raises(ToolError) as raised:
+            await client.call_tool("sainsburys_search", {"query": "milk"})
+
+    assert str(raised.value).startswith("[site_login_required | retryable=false]")
+
+
+@pytest.mark.parametrize(
+    ("call", "action"),
+    [
+        (("sainsburys_search", {"query": "milk"}), "search_products"),
+        (("sainsburys_add_to_basket", {"product_name": "Milk"}), "add_to_basket"),
+        (("sainsburys_products_we_love", {}), "products_we_love"),
+    ],
+)
+async def test_a_page_that_is_too_slow_is_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+    authenticate: Authenticate,
+    tmp_path: Path,
+    call: tuple[str, dict[str, str]],
+    action: str,
+) -> None:
+    authenticate()
+    storage_state_path = tmp_path / "session.json"
+    storage_state_path.write_text("{}", encoding="utf-8")
+    settings = SainsburysSettings(sainsburys_storage_state_path=storage_state_path)
+
+    def too_slow(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        msg = "Locator.click: Timeout 30000ms exceeded."
+        raise PlaywrightTimeoutError(msg)
+
+    monkeypatch.setattr(site, action, too_slow)
+
+    async with Client(build_server(SITE, settings)) as client:
+        with pytest.raises(ToolError) as raised:
+            await client.call_tool(*call)
+
+    text = str(raised.value)
+    assert text.startswith("[timeout | retryable=true]")
+    assert "Locator.click" not in text
 
 
 async def test_sainsburys_add_to_basket_wires_to_the_browser_action(
